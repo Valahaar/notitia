@@ -1,0 +1,2 @@
+python-dotenv>=0.15.0 # For examples, to load .env files if needed
+httpx>=0.20.0 # For asynchronous HTTP requests

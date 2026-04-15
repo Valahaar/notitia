@@ -1,0 +1,9 @@
+**/node_modules
+**/dist
+**/coverage
+**/build
+**/.yarn/install-state.gz
+
+**/.env
+**/__pycache__
+**/*.pyc

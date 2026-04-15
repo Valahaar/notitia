@@ -1,0 +1,40 @@
+services:
+  service:
+    build:
+      context: ./packages/service
+      dockerfile: Dockerfile
+      network: host
+      tags:
+        - notitia-service:latest
+    # ports:
+    #   - 60000:3000
+    container_name: notitia-service
+    network_mode: host
+
+    volumes:
+      - ~/.config/gcloud:/root/.config/gcloud
+    environment:
+      - NOTIFICATION_SERVICE_URL=https://notitia.example.com
+      - PORT=60000
+      - GCP_PROJECT_ID=my-gcp-project
+      - GCP_LOCATION_ID=europe-west1
+      - GCP_JOB_QUEUE_NAME=notitia
+      - REDIS_HOST=192.168.12.95
+      - REDIS_PORT=26379
+      - AUTH_TOKEN=test-token
+      # - SCHEDULER_TYPE=in-memory
+
+  service-in-memory:
+    build:
+      context: ./packages/service
+      dockerfile: Dockerfile
+      network: host
+      tags:
+        - notitia-service:latest
+    image: notitia-service:latest
+    container_name: notitia-service-in-memory
+    network_mode: host
+    environment:
+      - SCHEDULER_TYPE=in-memory
+      - NOTIFICATION_SERVICE_URL=http://localhost:60000
+      - PORT=60000

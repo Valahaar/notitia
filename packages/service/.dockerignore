@@ -1,0 +1,22 @@
+node_modules
+.npm
+dist
+Dockerfile
+.dockerignore
+
+# Git files
+.git
+.gitignore
+
+# Development files
+*.log
+.env
+.env.*
+!\.env.example
+
+# Test files if not needed in production image
+# test
+# coverage
+# jest.config.js
+# jest-e2e.json
+# **/*spec.ts

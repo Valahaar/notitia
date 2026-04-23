@@ -9,6 +9,10 @@ import KeyvMongo from '@keyv/mongo';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { HealthController } from './common/controllers/health.controller';
 
+const throttleTtl = Number(process.env.THROTTLE_TTL);
+const throttleLimit = Number(process.env.THROTTLE_LIMIT);
+const throttleEnabled = throttleTtl > 0 && throttleLimit > 0;
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -22,9 +26,9 @@ import { HealthController } from './common/controllers/health.controller';
         return config;
       },
     }),
-    ThrottlerModule.forRoot({
-      throttlers: [{ ttl: 60_000, limit: 100 }],
-    }),
+    ...(throttleEnabled
+      ? [ThrottlerModule.forRoot({ throttlers: [{ ttl: throttleTtl, limit: throttleLimit }] })]
+      : []),
     CacheModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
@@ -50,7 +54,7 @@ import { HealthController } from './common/controllers/health.controller';
   ],
   controllers: [HealthController],
   providers: [
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    ...(throttleEnabled ? [{ provide: APP_GUARD, useClass: ThrottlerGuard }] : []),
   ],
 })
 export class AppModule implements NestModule {

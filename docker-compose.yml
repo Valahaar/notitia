@@ -23,6 +23,12 @@ services:
       - REDIS_PORT=26379
       - AUTH_TOKEN=test-token
       # - SCHEDULER_TYPE=in-memory
+      # Opt-in global rate limiting (omit both to disable):
+      # - THROTTLE_TTL=60000
+      # - THROTTLE_LIMIT=100
+      # Default per-request HTTP timeout in seconds (15–1800). On GCP this also
+      # sets the Cloud Tasks dispatchDeadline. Omit to fall back to 600s.
+      # - DEFAULT_TIMEOUT_SECONDS=600
 
   service-in-memory:
     build:

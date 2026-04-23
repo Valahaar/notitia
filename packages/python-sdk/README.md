@@ -70,6 +70,13 @@ job_id = await client.send_schedule_request(ScheduleRequest(
     schedule=RecurringSchedule(schedule="0 0 * * *"),
 ))
 
+# Long-running target — override the per-attempt timeout (seconds, 15–1800).
+# On the GCP scheduler this maps to the Cloud Tasks dispatch deadline.
+job_id = await client.send_schedule_request(ScheduleRequest(
+    target="https://example.com/heavy-job",
+    timeout=1500,
+))
+
 # Cancel a scheduled job
 cancelled = await client.cancel_scheduled_job(job_id)
 

@@ -34,6 +34,7 @@ Schedule an HTTP call for immediate, one-time, or recurring execution.
 | `params` | object | No | URL query parameters |
 | `queue` | string | No | Queue identifier (defaults to the service's configured queue) |
 | `schedule` | object | No | When to execute (omit for immediate) |
+| `timeout` | integer | No | Max duration (seconds, 15–1800) a single HTTP attempt may run. Maps to the Cloud Tasks dispatch deadline on the GCP scheduler. Falls back to `DEFAULT_TIMEOUT_SECONDS`, else 600s (Cloud Tasks default). |
 
 **Schedule types:**
 
@@ -88,6 +89,9 @@ Health check endpoint. Returns `{ "status": "ok" }`.
 | `NOTIFICATION_SERVICE_URL` | GCP mode | — | Public base URL of this service (for GCP callbacks) |
 | `REDIS_HOST` | GCP mode | `localhost` | Redis host (used for UFID mapping) |
 | `REDIS_PORT` | GCP mode | `6379` | Redis port |
+| `DEFAULT_TIMEOUT_SECONDS` | No | `600` | Default max duration (seconds, 15–1800) per HTTP attempt when the request body does not specify `timeout`. Maps to the Cloud Tasks dispatch deadline on the GCP scheduler. |
+| `THROTTLE_TTL` | No | — | Rate-limit window in ms. Set together with `THROTTLE_LIMIT` to enable global throttling (opt-in). Omit both to disable. |
+| `THROTTLE_LIMIT` | No | — | Max requests per `THROTTLE_TTL` window. Opt-in; see above. |
 
 ### Authentication
 
@@ -160,7 +164,7 @@ These endpoints are used by GCP Cloud Tasks to call back into the service. They 
 ### Security
 
 - **Helmet** — HTTP security headers
-- **Rate limiting** — 100 requests per 60 seconds (global)
+- **Rate limiting** — Opt-in; set `THROTTLE_TTL` (ms) and `THROTTLE_LIMIT` to enable global throttling. Disabled by default.
 - **Input validation** — Strict whitelist validation on all request bodies
 - **CRLF sanitization** — User-provided headers are sanitized to prevent header injection
 - **Query parameter redaction** — Query params are redacted in logs to protect API keys

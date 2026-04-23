@@ -15,7 +15,7 @@ Provides Python applications with a typed, async interface to schedule notificat
 - **`NotitiaError`** (`src/notitia/low_level_client.py`) — Exception carrying message, HTTP status, response data, and optional cause.
 - **`EventConfig[PA]`** (`src/notitia/types.py`) — Per-event configuration: a `prepare` callable, default `target` URL, and default `method`.
 - **`PreparedEventData`** (`src/notitia/types.py`) — Output of `prepare()`: payload, headers, params, schedule, and optional method/target/queue overrides.
-- **`ScheduleRequest`** (`src/notitia/common_types.py`) — Low-level DTO matching the service's `ScheduleRequestDto`.
+- **`ScheduleRequest`** (`src/notitia/common_types.py`) — Low-level DTO matching the service's `ScheduleRequestDto`. Includes `timeout: Optional[int]` (seconds, 15–1800) — the SDK field is snake_case but matches the service's camelCase `timeout` on the wire since both happen to be a single word. Maps to the Cloud Tasks dispatch deadline on the GCP scheduler.
 - **`Schedule`** (`src/notitia/common_types.py`) — Union of `OneTimeSchedule` (ISO 8601 time) and `RecurringSchedule` (CRON/RRule pattern), discriminated by `ScheduleType`.
 
 ## Invariants

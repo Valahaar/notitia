@@ -7,6 +7,9 @@ import {
     ValidateNested,
     IsEnum,
     IsISO8601,
+    IsInt,
+    Min,
+    Max,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -98,4 +101,16 @@ export class ScheduleRequestDto<T extends ScheduleBaseDto = ScheduleBaseDto> {
     @IsOptional()
     @IsObject()
     params?: Record<string, string>;
+
+    @ApiPropertyOptional({
+        type: Number,
+        minimum: 15,
+        maximum: 1800,
+        description: 'Maximum duration in seconds the target HTTP call is allowed to run before it is cancelled and retried. Maps to Cloud Tasks dispatch deadline when using the GCP scheduler; GCP accepts 15–1800 (30 min). If omitted, the service default (DEFAULT_TIMEOUT_SECONDS) is used, else Cloud Tasks defaults to 600s.',
+    })
+    @IsOptional()
+    @IsInt()
+    @Min(15)
+    @Max(1800)
+    timeout?: number;
 }

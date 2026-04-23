@@ -42,6 +42,8 @@ class PreparedEventData:
     """Optional target to override the event's default or client's default."""
     target: Optional[str] = None
     queue: Optional[str] = None
+    """Optional per-call timeout in seconds (15–1800). Maps to the Cloud Tasks dispatch deadline on the GCP scheduler."""
+    timeout: Optional[int] = None
 
 # For TArgs, using List[Any] or a TypeVar for more specific argument types if needed.
 # Callable[..., PreparedEventData] means any number of args, any type of args.

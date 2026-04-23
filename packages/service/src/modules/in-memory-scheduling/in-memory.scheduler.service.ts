@@ -164,6 +164,7 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
                 payload: request.payload,
                 headers: request.headers,
                 params: request.params,
+                timeoutSeconds: request.timeout,
             });
 
             if (!result.success && attempt < maxRetries) {

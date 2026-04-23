@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import axios, { AxiosRequestConfig, Method } from 'axios';
 import { HttpMethod } from '../dto/schedule-request.dto';
 import { safeUrl } from '../utils/log.util';
@@ -10,6 +11,7 @@ export interface HttpExecutionRequest {
     payload?: Record<string, any>;
     headers?: Record<string, string>;
     params?: Record<string, any>;
+    timeoutSeconds?: number;
 }
 
 export interface HttpExecutionResult {
@@ -22,10 +24,19 @@ export interface HttpExecutionResult {
 @Injectable()
 export class HttpExecutorService {
     private readonly logger = new Logger(HttpExecutorService.name);
+    private readonly defaultTimeoutMs: number;
+
+    constructor(configService: ConfigService) {
+        const rawTimeout = Number(configService.get<string>('DEFAULT_TIMEOUT_SECONDS'));
+        this.defaultTimeoutMs = Number.isFinite(rawTimeout) && rawTimeout >= 15 && rawTimeout <= 1800
+            ? Math.floor(rawTimeout) * 1000
+            : 1000 * 60 * 10; // 10 minutes - same as Cloud Tasks default (600s)
+    }
 
     async executeHttpRequest(request: HttpExecutionRequest): Promise<HttpExecutionResult> {
-        const { taskId, target, method = HttpMethod.POST, payload, headers = {}, params } = request;
+        const { taskId, target, method = HttpMethod.POST, payload, headers = {}, params, timeoutSeconds } = request;
         const startTime = Date.now();
+        const timeoutMs = timeoutSeconds && timeoutSeconds > 0 ? timeoutSeconds * 1000 : this.defaultTimeoutMs;
 
         // Sanitize user-supplied headers: reject CRLF sequences and restrict header names
         const sanitizedHeaders: Record<string, string> = {};
@@ -50,7 +61,7 @@ export class HttpExecutorService {
                 url: target,
                 headers: finalHeaders,
                 params: params,
-                timeout: 30_000,
+                timeout: timeoutMs,
             };
 
             if (payload && (method === HttpMethod.POST || method === HttpMethod.PUT || method === HttpMethod.PATCH)) {

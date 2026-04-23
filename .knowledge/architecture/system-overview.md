@@ -46,15 +46,15 @@ Environment variables configure GCP project/queue, Redis connection, auth token,
 
 ## Security Hardening
 
-- **Rate limiting**: `@nestjs/throttler` (100 req/60s) applied globally via `APP_GUARD`.
+- **Rate limiting**: `@nestjs/throttler` is **opt-in** — `ThrottlerModule` and `ThrottlerGuard` are only registered when both `THROTTLE_TTL` (ms) and `THROTTLE_LIMIT` env vars are set to positive numbers. When unset, no throttler runs and zero overhead is incurred.
 - **Body size limit**: `express.json({ limit: '1mb' })`.
 - **Security headers**: `helmet()` middleware.
 - **Exception filters**: `HttpExceptionFilter` for structured HTTP errors, `AllExceptionsFilter` as catch-all to prevent stack trace leaks.
 - **Request tracing**: `RequestIdMiddleware` generates/propagates `X-Request-ID` on every request.
 - **Header sanitization**: User-supplied headers are stripped of CRLF sequences before outgoing requests.
 - **Log sanitization**: `safeUrl()` strips query strings from URLs in all log output to prevent leaking API keys.
-- **HTTP timeout**: 30s timeout on all outgoing Axios requests.
-- **Health check**: `GET /health` (throttle-exempt) for container probes.
+- **HTTP timeout**: Per-request via `timeout` field on `ScheduleRequestDto` (15–1800s). Falls back to `DEFAULT_TIMEOUT_SECONDS` env var, else 10 min (matches Cloud Tasks' default dispatch deadline). For GCP, the value is also set as the task's `dispatchDeadline` so Cloud Tasks and axios time out in lockstep.
+- **Health check**: `GET /health` (throttle-exempt when throttling is enabled) for container probes.
 - **In-memory retry**: Dev scheduler retries failed executions up to 3 times with exponential backoff.
 
 ## Failure Modes

@@ -46,6 +46,7 @@ Production job scheduler that uses Google Cloud Tasks to execute HTTP requests a
 - **No idempotency tokens**: Relay and meta endpoints don't deduplicate; they rely on GCP's task-level dedup configuration.
 - **Task ID format assumption**: `createTask()` returns the GCP task name and extracts the last path segment as ID — assumes GCP's naming format doesn't change.
 - **Self-referencing URL**: `NOTIFICATION_SERVICE_URL` must be reachable from GCP Cloud Tasks (public or VPC-connected).
+- **Dispatch deadline**: Cloud Tasks caps each attempt at 10 min by default (max 30 min). `ScheduleRequestDto.timeout` (seconds) sets the relay task's `dispatchDeadline` per-request; `DEFAULT_TIMEOUT_SECONDS` env var provides a service-wide default. Meta-task callbacks keep the 10 min default — they only recompute + reschedule, so they should return quickly. Any single HTTP target call that can exceed 30 min requires an async fire-and-forget pattern (return 202 quickly, complete the work out of band).
 
 ## Related Files
 

@@ -1,5 +1,5 @@
 import { HttpMethod as AppHttpMethod } from '../../../common/dto/schedule-request.dto';
-import { IsString, IsEnum, IsObject, IsOptional, IsNotEmpty } from 'class-validator';
+import { IsString, IsEnum, IsObject, IsOptional, IsNotEmpty, IsInt, Min, Max } from 'class-validator';
 
 export class GcpTaskRelayPayloadDto {
     @IsString()
@@ -20,4 +20,10 @@ export class GcpTaskRelayPayloadDto {
     @IsObject()
     @IsOptional()
     params?: Record<string, any>;
+
+    @IsOptional()
+    @IsInt()
+    @Min(15)
+    @Max(1800)
+    timeout?: number;
 }

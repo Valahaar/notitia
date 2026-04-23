@@ -7,7 +7,7 @@ export class GcpTaskRelayService {
     constructor(private readonly httpExecutor: HttpExecutorService) { }
 
     async executeTask(payload: GcpTaskRelayPayloadDto, taskId: string): Promise<void> {
-        const { target, method, payload: requestPayload, headers, params } = payload;
+        const { target, method, payload: requestPayload, headers, params, timeout } = payload;
 
         if (headers && !headers['X-Notitia-Task-ID']) {
             headers['X-Notitia-Task-ID'] = taskId;
@@ -20,6 +20,7 @@ export class GcpTaskRelayService {
             payload: requestPayload,
             headers,
             params,
+            timeoutSeconds: timeout,
         });
 
         if (!result.success) {

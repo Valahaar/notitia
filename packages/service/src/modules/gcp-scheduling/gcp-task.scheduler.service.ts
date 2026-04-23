@@ -25,6 +25,7 @@ export class GcpTaskSchedulerService implements IJobScheduler {
     private gcpLocation: string;
     private gcpJobQueue: string; // For tasks targeting /relay
     private serviceUrl: string; // Base URL of this notification service
+    private defaultTimeout?: number; // Seconds; undefined = use Cloud Tasks default (600s) for dispatch deadline
 
     constructor(
         private configService: ConfigService,
@@ -35,6 +36,11 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         this.gcpLocation = this.configService.get<string>('GCP_LOCATION_ID')!;
         this.gcpJobQueue = this.configService.get<string>('GCP_JOB_QUEUE_NAME')!;
         this.serviceUrl = this.configService.get<string>('NOTIFICATION_SERVICE_URL')!;
+
+        const rawTimeout = Number(this.configService.get<string>('DEFAULT_TIMEOUT_SECONDS'));
+        if (Number.isFinite(rawTimeout) && rawTimeout >= 15 && rawTimeout <= 1800) {
+            this.defaultTimeout = Math.floor(rawTimeout);
+        }
 
         const missingEnvVars = [
             !this.gcpProject && 'GCP_PROJECT_ID',
@@ -89,7 +95,7 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         return this.cloudTasksClient.taskPath(this.gcpProject, this.gcpLocation, queueName, taskName);
     }
 
-    public async createTask(queueName: string, url: string, payload: any, scheduleTime?: Date, taskName?: string): Promise<string> {
+    public async createTask(queueName: string, url: string, payload: any, scheduleTime?: Date, taskName?: string, timeoutSeconds?: number): Promise<string> {
         const body = Buffer.from(JSON.stringify(payload));
 
         // Get the authentication token from environment
@@ -120,6 +126,11 @@ export class GcpTaskSchedulerService implements IJobScheduler {
             };
         }
 
+        if (timeoutSeconds) {
+            // Cloud Tasks calls this `dispatchDeadline`; we surface it as `timeout` in the public API.
+            task.dispatchDeadline = { seconds: timeoutSeconds };
+        }
+
         try {
             const [response] = await this.cloudTasksClient.createTask({ parent: this.getQueuePath(queueName), task });
             return response.name?.split('/').at(-1)!;
@@ -143,12 +154,15 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         originalRequest: ScheduleRequestDto,
         scheduleTime?: Date, // If undefined, task is scheduled for ASAP.
     ): Promise<string | undefined> {
+        const effectiveTimeout = originalRequest.timeout ?? this.defaultTimeout;
+
         const relayPayload: GcpTaskRelayPayloadDto = {
             target: originalRequest.target,
             method: originalRequest.method || AppHttpMethod.POST,
             payload: originalRequest.payload,
             headers: originalRequest.headers,
             params: originalRequest.params,
+            timeout: effectiveTimeout,
         };
 
         return await this.createTask(
@@ -156,6 +170,8 @@ export class GcpTaskSchedulerService implements IJobScheduler {
             `${this.serviceUrl}${GCP_RELAY_PATH}`,
             relayPayload,
             scheduleTime,
+            undefined,
+            effectiveTimeout,
         );
     }
 

@@ -30,6 +30,10 @@ Ensure consistent communication between the Python SDK and the NestJS service, a
   headers?: Record<string, string>;
   params?: Record<string, string>;  // Query parameters
   queue?: string;          // GCP queue name override
+  timeout?: number;        // Max seconds a single HTTP attempt may run (15–1800).
+                           // Maps to Cloud Tasks dispatch deadline on GCP scheduler.
+                           // Falls back to DEFAULT_TIMEOUT_SECONDS env var, else
+                           // Cloud Tasks' 600s default.
   schedule?: {
     type: "ON",            // One-time
     time: string           // ISO 8601 datetime (UTC assumed)

@@ -34,9 +34,13 @@ class NotitiaClient(Generic[EventNameT]):
         payload: Any = None,
         headers: Any = None,
         params: Any = None,
+        timeout: Optional[int] = None,
     ) -> str:
         """
         Sends a request to the specified endpoint with the given method, payload, headers, and params.
+
+        `timeout` is the max duration in seconds the target HTTP call may run
+        (15–1800). Maps to the Cloud Tasks dispatch deadline on the GCP scheduler.
         """
 
         try:
@@ -49,6 +53,7 @@ class NotitiaClient(Generic[EventNameT]):
                 headers=headers,
                 params=params,
                 schedule=schedule,
+                timeout=timeout,
             )
         except NotitiaError:  # Re-raise SDK errors directly
             raise
@@ -113,6 +118,7 @@ class NotitiaClient(Generic[EventNameT]):
             payload=prepared_data.payload,
             headers=prepared_data.headers,
             params=prepared_data.params,
+            timeout=prepared_data.timeout,
         )
 
     async def cancel(self, job_id: str, queue: Optional[str] = None) -> bool:

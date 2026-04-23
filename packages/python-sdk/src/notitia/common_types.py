@@ -46,3 +46,8 @@ class ScheduleRequest:
     payload: Optional[Dict[str, Any]] = None
     headers: Optional[Dict[str, str]] = None
     params: Optional[Dict[str, str]] = None
+    # Max duration (seconds) a single HTTP attempt can run before it is
+    # cancelled and retried. Maps to the Cloud Tasks dispatch deadline when
+    # using the GCP scheduler. GCP accepts 15–1800 (30 min). None → server
+    # default (DEFAULT_TIMEOUT_SECONDS), else Cloud Tasks' 600s default.
+    timeout: Optional[int] = None

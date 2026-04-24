@@ -31,7 +31,10 @@ export class MetaController {
         const taskName = headers['x-cloudtasks-taskname'] || 'unknown';
         const retryCount = headers['x-cloudtasks-taskretrycount'] || '0';
 
-        this.logger.log(`[${ufid}] Received meta-job (taskName: ${taskName}, retry: ${retryCount}) -> ${safeUrl(originalRequest.target)}`);
+        this.logger.log(
+            { ufid, taskName, retry: retryCount, target: safeUrl(originalRequest.target) },
+            'Received meta-job',
+        );
         try {
             await this.metaService.processMetaJob(ufid, originalRequest, originalRequest.queue);
         } catch (error) {

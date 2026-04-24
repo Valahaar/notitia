@@ -137,7 +137,10 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         } catch (error: any) {
             if (error.hasOwnProperty('code') && error.hasOwnProperty('details')) {
                 const details = error.details;
-                this.logger.error(`error creating GCP task on ${queueName} for ${url} @ ${scheduleTime?.toISOString() || 'now'} (code=${error.code}): ${details}`);
+                this.logger.error(
+                    { queueName, url: safeUrl(url), scheduleTime: scheduleTime?.toISOString() ?? 'now', code: error.code, details },
+                    'Error creating GCP task',
+                );
                 throw new HttpException(details, 400);
             }
             throw error;
@@ -250,7 +253,10 @@ export class GcpTaskSchedulerService implements IJobScheduler {
             if (!gcpTaskId) {
                 throw new Error(`Failed to schedule direct relay task for ${safeUrl(request.target)}`);
             }
-            this.logger.log(`[${gcpTaskId}] Scheduled direct relay ${nextExecutionTime?.toISOString() || 'ASAP'} -> ${safeUrl(request.target)}`);
+            this.logger.log(
+                { gcpTaskId, scheduleTime: nextExecutionTime?.toISOString() ?? 'ASAP', target: safeUrl(request.target) },
+                'Scheduled direct relay',
+            );
 
             // For direct tasks, the user-facing ID is the generated task ID we passed to the relay
             return { ufid: undefined, gcpTaskId };
@@ -261,7 +267,10 @@ export class GcpTaskSchedulerService implements IJobScheduler {
 
             // Long-term one-time job OR any recurring job: create UFID and schedule a meta-job
             const ufid = generateNumericId();
-            this.logger.log(`[${ufid}] Scheduling meta-job (recurring: ${recurring}) ${nextExecutionTime!.toISOString()} -> ${safeUrl(request.target)}`);
+            this.logger.log(
+                { ufid, recurring, scheduleTime: nextExecutionTime!.toISOString(), target: safeUrl(request.target) },
+                'Scheduling meta-job',
+            );
 
             const gcpMetaTaskId = await this.createMetaEndpointTask(ufid, { ...request, isOccurrence: nextIsOccurrence }, nextExecutionTime!);
             if (!gcpMetaTaskId) {
@@ -269,7 +278,10 @@ export class GcpTaskSchedulerService implements IJobScheduler {
             }
 
             await this.setIdForUfid(ufid, gcpMetaTaskId, request.queue); // Store UFID -> GCP Meta Task ID (RID)
-            this.logger.log(`[${ufid}] Meta-job scheduled. GCP Task ID: ${gcpMetaTaskId}`);
+            this.logger.log(
+                { ufid, gcpTaskId: gcpMetaTaskId },
+                'Meta-job scheduled',
+            );
             return { ufid, gcpTaskId: gcpMetaTaskId };
         }
     }
@@ -282,7 +294,10 @@ export class GcpTaskSchedulerService implements IJobScheduler {
     }
 
     async cancelJob(jobId: string, queueName?: string): Promise<boolean> { // jobId can be UFID or direct GCP Task ID
-        this.logger.log(`[${jobId}] Attempting to cancel job.`);
+        this.logger.log(
+            { jobId },
+            'Attempting to cancel job',
+        );
 
         const gcpTaskIdFromCache = await this.getIdFromUfid(jobId);
         const qName = this.getQueueName(queueName);
@@ -293,7 +308,10 @@ export class GcpTaskSchedulerService implements IJobScheduler {
 
         const successful = await this.cloudTasksClient.deleteTask({ name }).then(() => true).catch((err) => {
             if (err.code === 5) { // NOT_FOUND error code from GCP
-                this.logger.warn(`[${jobId}] GCP task ${name} not found.`);
+                this.logger.warn(
+                    { jobId, taskName: name },
+                    'GCP task not found',
+                );
                 return false;
             }
             throw err;
@@ -301,7 +319,10 @@ export class GcpTaskSchedulerService implements IJobScheduler {
 
         if (gcpTaskIdFromCache) {
             await this.delUfid(jobId);
-            this.logger.log(`[${jobId}] Cleared UFID from cache as its tracked task was successfully cancelled.`);
+            this.logger.log(
+                { jobId },
+                'Cleared UFID from cache as its tracked task was successfully cancelled',
+            );
         }
 
         return successful;

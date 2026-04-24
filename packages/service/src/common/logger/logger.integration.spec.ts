@@ -9,7 +9,6 @@ import { levelToSeverity } from './severity';
 import { makeSampler } from './sampler';
 import { parseCloudTrace } from './trace';
 import { RequestIdMiddleware } from '../middleware/request-id.middleware';
-import { TraceContextMiddleware } from '../middleware/trace-context.middleware';
 import { logAudit, logError, ERROR_REPORTING_TYPE } from './helpers';
 import { MiddlewareConsumer, NestModule } from '@nestjs/common';
 
@@ -78,7 +77,7 @@ class TestController {
 })
 class TestAppModule implements NestModule {
     configure(consumer: MiddlewareConsumer) {
-        consumer.apply(RequestIdMiddleware, TraceContextMiddleware).forRoutes('*');
+        consumer.apply(RequestIdMiddleware).forRoutes('*');
     }
 }
 

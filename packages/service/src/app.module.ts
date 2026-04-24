@@ -7,7 +7,6 @@ import { APP_GUARD } from '@nestjs/core';
 import KeyvRedis from '@keyv/redis';
 import KeyvMongo from '@keyv/mongo';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
-import { TraceContextMiddleware } from './common/middleware/trace-context.middleware';
 import { HealthController } from './common/controllers/health.controller';
 import { LoggerModule } from './common/logger/logger.module';
 
@@ -63,7 +62,7 @@ const throttleEnabled = throttleTtl > 0 && throttleLimit > 0;
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
     consumer
-      .apply(RequestIdMiddleware, TraceContextMiddleware)
+      .apply(RequestIdMiddleware)
       .forRoutes('*');
   }
 }

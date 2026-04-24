@@ -11,7 +11,7 @@ The service uses `nestjs-pino` as its sole `LoggerService`. All logs emit as sin
 ## Responsibilities
 
 - Emit GCP-native log records: `severity`, `message`, `logging.googleapis.com/trace|spanId|trace_sampled|sourceLocation`.
-- Correlate every log line inside an HTTP request with `requestId` (from `RequestIdMiddleware`) and trace fields (from `TraceContextMiddleware` parsing `X-Cloud-Trace-Context`).
+- Correlate every log line inside an HTTP request with `requestId` and GCP trace fields. Both are parsed inline in `customProps` (in `logger.module.ts`) because pino-http fires before NestJS `configure()` middleware — `RequestIdMiddleware` only writes the ID back to the response header.
 - Route stack-bearing error logs to Cloud Error Reporting via the `@type` marker on `logError(...)`.
 - Tag audit events (`logAudit(...)`) with `audit: true` + `event` for easy sink construction.
 - Apply env-controlled sampling only to `HttpExecutorService`'s success-path logs (tagged `sampleable: true`). Warn/error/audit are never sampled.
@@ -46,8 +46,6 @@ All validated at startup; invalid values fail the bootstrap with a descriptive e
 - `common/logger/redact.ts` — default + user redact path builder.
 - `common/logger/severity.ts` — pino-label → GCP-severity mapping.
 - `common/logger/helpers.ts` — `logAudit` / `logError`.
-- `common/middleware/trace-context.middleware.ts` — parses `X-Cloud-Trace-Context` after `RequestIdMiddleware`.
-
 ## Related
 
 - [API Contract](../conventions/api-contract.md) — endpoints that emit audit logs.

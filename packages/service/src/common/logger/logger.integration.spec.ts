@@ -1,3 +1,4 @@
+import { Writable } from 'stream';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, Module, Controller, Get } from '@nestjs/common';
 import { Logger as PinoLogger, LoggerModule as PinoLoggerModule } from 'nestjs-pino';
@@ -11,6 +12,17 @@ import { RequestIdMiddleware } from '../middleware/request-id.middleware';
 import { TraceContextMiddleware } from '../middleware/trace-context.middleware';
 import { logAudit, logError, ERROR_REPORTING_TYPE } from './helpers';
 import { MiddlewareConsumer, NestModule } from '@nestjs/common';
+
+class CapturingStream extends Writable {
+    public buffer = '';
+    _write(chunk: Buffer | string, _enc: string, cb: (e?: Error | null) => void) {
+        this.buffer += chunk.toString();
+        cb();
+    }
+    clear() { this.buffer = ''; }
+}
+
+const captureStream = new CapturingStream();
 
 @Controller()
 class TestController {
@@ -44,6 +56,7 @@ class TestController {
                 formatters: { level: (label: string) => ({ severity: levelToSeverity(label) }) },
                 redact: { paths: buildRedactPaths(''), censor: '[REDACTED]' },
                 hooks: { logMethod: makeSampler(1.0) },
+                stream: captureStream,
                 customProps: (req: any) => {
                     let requestId = req.headers['x-request-id'] as string | undefined;
                     if (!requestId) {
@@ -71,8 +84,6 @@ class TestAppModule implements NestModule {
 
 describe('Logger integration', () => {
     let app: INestApplication;
-    let captured: string[];
-    let originalWrite: typeof process.stdout.write;
 
     beforeAll(async () => {
         const moduleRef: TestingModule = await Test.createTestingModule({
@@ -88,22 +99,12 @@ describe('Logger integration', () => {
     });
 
     beforeEach(() => {
-        captured = [];
-        originalWrite = process.stdout.write.bind(process.stdout);
-        process.stdout.write = ((chunk: any, ...rest: any[]) => {
-            const str = typeof chunk === 'string' ? chunk : chunk.toString();
-            captured.push(str);
-            return originalWrite(chunk, ...rest);
-        }) as typeof process.stdout.write;
-    });
-
-    afterEach(() => {
-        process.stdout.write = originalWrite;
+        captureStream.clear();
     });
 
     function parsedLines(): Array<Record<string, unknown>> {
-        return captured
-            .flatMap((c) => c.split('\n'))
+        return captureStream.buffer
+            .split('\n')
             .filter((s) => s.trim().startsWith('{'))
             .map((s) => {
                 try { return JSON.parse(s); } catch { return null; }
@@ -160,7 +161,7 @@ describe('Logger integration', () => {
             .get('/ping')
             .set('Authorization', 'Bearer SHOULD_NOT_APPEAR')
             .expect(200);
-        const joined = captured.join('');
+        const joined = captureStream.buffer;
         expect(joined).not.toContain('SHOULD_NOT_APPEAR');
         expect(joined).toContain('[REDACTED]');
     });

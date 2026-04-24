@@ -92,6 +92,17 @@ Health check endpoint. Returns `{ "status": "ok" }`.
 | `DEFAULT_TIMEOUT_SECONDS` | No | `600` | Default max duration (seconds, 15–1800) per HTTP attempt when the request body does not specify `timeout`. Maps to the Cloud Tasks dispatch deadline on the GCP scheduler. |
 | `THROTTLE_TTL` | No | — | Rate-limit window in ms. Set together with `THROTTLE_LIMIT` to enable global throttling (opt-in). Omit both to disable. |
 | `THROTTLE_LIMIT` | No | — | Max requests per `THROTTLE_TTL` window. Opt-in; see above. |
+| `LOG_FORMAT` | No | `json` (prod) / `pretty` (dev) | Output format. `json` for Cloud Logging ingestion; `pretty` for local dev. |
+| `LOG_INCLUDE_SOURCE` | No | `false` | When `true` (or when `LOG_LEVEL=debug`), include `logging.googleapis.com/sourceLocation` on every log line. Has a small capture cost. |
+| `LOG_LEVEL` | No | `info` (prod) / `debug` (dev) | Minimum log level: `trace|debug|info|warn|error|fatal` |
+| `LOG_REDACT` | No | — | Comma-separated pino redact paths, appended to built-in defaults (authorization/cookie/password/token/secret are always redacted). |
+| `LOG_SAMPLE_RATE` | No | `1.0` | Fraction (0.0–1.0) of high-volume successful-execution logs to keep. Warnings, errors, and audit events are never sampled. |
+
+### Logging
+
+The service emits structured JSON on stdout in production, with GCP-native keys (`severity`, `logging.googleapis.com/trace`, etc). Cloud Logging ingests each line as a `jsonPayload`. Errors carry the Error Reporting `@type` marker and auto-group into incidents. Audit events (`job.scheduled`, `job.cancelled`) emit `audit: true` and an `event` field, making a `jsonPayload.audit=true` sink trivial to build.
+
+During development, set `LOG_FORMAT=pretty` (the default when `NODE_ENV !== 'production'`) for human-readable single-line output.
 
 ### Authentication
 

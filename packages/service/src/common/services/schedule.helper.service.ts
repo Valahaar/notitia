@@ -16,7 +16,10 @@ export class ScheduleHelperService {
      * @returns The Date of the next occurrence, or null if none is found or an error occurs.
      */
     public calculateNextOccurrence(scheduleString: string, fromDate: Date, inclusive: boolean = false): Date | null {
-        this.logger.debug(`Calculating next occurrence for schedule "${scheduleString.replace('\n', '\\n')}" from ${fromDate.toISOString()}`);
+        this.logger.debug(
+            { scheduleString, fromDate: fromDate.toISOString() },
+            'Calculating next occurrence for schedule',
+        );
         try {
             if (scheduleString.toUpperCase().includes('RRULE:')) {
                 const rule = RRule.fromString(scheduleString);
@@ -56,7 +59,10 @@ export class ScheduleHelperService {
                 return interval.next().toDate();
             }
         } catch (err: any) {
-            this.logger.error(`Error parsing schedule string "${scheduleString}": ${err.message}`);
+            this.logger.error(
+                { scheduleString, error: err.message },
+                'Error parsing schedule string',
+            );
             return null;
         }
     }
@@ -77,7 +83,10 @@ export class ScheduleHelperService {
                 return cronParser.parse(scheduleString);
             }
         } catch (err: any) {
-            this.logger.error(`Error parsing schedule string "${scheduleString}" for advanced use: ${err.message}`);
+            this.logger.error(
+                { scheduleString, error: err.message },
+                'Error parsing schedule string for advanced use',
+            );
             return null;
         }
     }

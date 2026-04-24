@@ -8,6 +8,7 @@ import KeyvRedis from '@keyv/redis';
 import KeyvMongo from '@keyv/mongo';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { HealthController } from './common/controllers/health.controller';
+import { LoggerModule } from './common/logger/logger.module';
 
 const throttleTtl = Number(process.env.THROTTLE_TTL);
 const throttleLimit = Number(process.env.THROTTLE_LIMIT);
@@ -26,6 +27,7 @@ const throttleEnabled = throttleTtl > 0 && throttleLimit > 0;
         return config;
       },
     }),
+    LoggerModule,
     ...(throttleEnabled
       ? [ThrottlerModule.forRoot({ throttlers: [{ ttl: throttleTtl, limit: throttleLimit }] })]
       : []),
@@ -59,6 +61,8 @@ const throttleEnabled = throttleTtl > 0 && throttleLimit > 0;
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(RequestIdMiddleware).forRoutes('*');
+    consumer
+      .apply(RequestIdMiddleware)
+      .forRoutes('*');
   }
 }

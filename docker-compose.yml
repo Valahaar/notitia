@@ -29,6 +29,12 @@ services:
       # Default per-request HTTP timeout in seconds (15–1800). On GCP this also
       # sets the Cloud Tasks dispatchDeadline. Omit to fall back to 600s.
       # - DEFAULT_TIMEOUT_SECONDS=600
+      # Structured logging (optional; sensible defaults apply):
+      # - LOG_LEVEL=info
+      # - LOG_FORMAT=json
+      # - LOG_SAMPLE_RATE=1.0
+      # - LOG_REDACT=
+      # - LOG_INCLUDE_SOURCE=false
 
   service-in-memory:
     build:

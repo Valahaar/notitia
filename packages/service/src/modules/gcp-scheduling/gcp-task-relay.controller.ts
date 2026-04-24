@@ -36,7 +36,10 @@ export class GcpTaskRelayController {
         // Task ID comes from headers if it's a meta-job-generated task, otherwise use GCP task name
         const taskId = payload.headers?.['X-Notitia-Task-ID'] || taskName;
 
-        this.logger.log(`[${taskId}] Received GCP task ${taskName} (retry: ${retryCount}) -> ${safeUrl(payload.target)}`);
+        this.logger.log(
+            { taskId, taskName, retry: retryCount, target: safeUrl(payload.target) },
+            'Received GCP task',
+        );
         try {
             await this.gcpTaskRelayService.executeTask(payload, taskId);
             // If executeTask completes without error, it means the attempt was made.
@@ -45,7 +48,10 @@ export class GcpTaskRelayController {
             const status = (error as any).status || HttpStatus.INTERNAL_SERVER_ERROR;
             const message = error instanceof Error ? error.message : String(error);
 
-            this.logger.error(`[${taskId}] Relay failed: ${message}`);
+            this.logger.error(
+                { taskId, error: message },
+                'Relay failed',
+            );
 
             throw new HttpException(
                 message || 'Error relaying to original target',

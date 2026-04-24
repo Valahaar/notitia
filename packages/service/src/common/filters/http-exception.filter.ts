@@ -1,5 +1,6 @@
 import { ExceptionFilter, Catch, ArgumentsHost, HttpException, Logger, HttpStatus } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { logError } from '../logger/helpers';
 
 @Catch(HttpException)
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -12,7 +13,6 @@ export class HttpExceptionFilter implements ExceptionFilter {
         const status = exception.getStatus();
         const exceptionResponse = exception.getResponse();
 
-        // Ensure message is a string or a structured object, not an array of messages from class-validator
         let messageDetail: any = 'Internal server error';
         if (typeof exceptionResponse === 'string') {
             messageDetail = exceptionResponse;
@@ -28,25 +28,26 @@ export class HttpExceptionFilter implements ExceptionFilter {
             path: request.url,
             method: request.method,
             message: messageDetail,
-            // Include the request body if it's a BadRequest (often validation related)
             ...(status === HttpStatus.BAD_REQUEST && request.body && Object.keys(request.body).length > 0 && { body: request.body }),
         };
 
-        const logMessage = `HTTP Exception: ${request.method} ${request.url} - Status: ${status} - Error: ${JSON.stringify(messageDetail)}`;
+        const logFields = {
+            status,
+            path: request.url,
+            method: request.method,
+            detail: messageDetail,
+            ...(status === HttpStatus.BAD_REQUEST && request.body && Object.keys(request.body).length > 0
+                ? { requestBody: request.body }
+                : {}),
+        };
 
-        if (status === HttpStatus.BAD_REQUEST && request.body && Object.keys(request.body).length > 0) {
-            this.logger.error(
-                `${logMessage} - Request Body: ${JSON.stringify(request.body)}`,
-                exception.stack,
-            );
+        // Only route 5xx to Cloud Error Reporting; 4xx are expected client errors.
+        if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+            logError(this.logger, exception, logFields);
         } else {
-            this.logger.error(
-                logMessage,
-                exception.stack,
-            );
+            this.logger.error(logFields, exception.message);
         }
 
-        // Prevent sending an array of messages directly, use the structured errorResponse
         response.status(status).json(errorResponse);
     }
 }

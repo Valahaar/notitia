@@ -4,6 +4,7 @@ import { JobSchedulingService } from './job-scheduling.service';
 import { ScheduleRequestDto, OneTimeScheduleDto, RecurringScheduleDto } from '../../common/dto/schedule-request.dto';
 import { ScheduleJobResponseDto } from '../../common/dto/schedule-job-response.dto';
 import { safeUrl } from '../../common/utils/log.util';
+import { logAudit } from '../../common/logger/helpers';
 
 @ApiTags('Job Scheduling')
 @Controller()
@@ -55,7 +56,12 @@ export class JobSchedulingController {
     @ApiResponse({ status: 500, description: 'Internal server error.' })
     async scheduleJob(@Body() scheduleRequestDto: ScheduleRequestDto): Promise<ScheduleJobResponseDto> {
         const jobId = await this.jobSchedulingService.scheduleJobProcessing(scheduleRequestDto);
-        this.logger.log(`[audit] scheduled job=${jobId} target=${safeUrl(scheduleRequestDto.target)} method=${scheduleRequestDto.method || 'POST'} schedule=${scheduleRequestDto.schedule?.type || 'immediate'}`);
+        logAudit(this.logger, 'job.scheduled', {
+            jobId,
+            target: safeUrl(scheduleRequestDto.target),
+            method: scheduleRequestDto.method || 'POST',
+            schedule: scheduleRequestDto.schedule?.type || 'immediate',
+        });
         return { jobId };
     }
 
@@ -69,7 +75,11 @@ export class JobSchedulingController {
     @ApiResponse({ status: 500, description: 'Internal server error during cancellation.' })
     async cancelScheduledJob(@Param('id') jobId: string, @Query('queue') queue?: string): Promise<boolean> {
         const result = await this.jobSchedulingService.cancelScheduledJobProcessing(jobId, queue);
-        this.logger.log(`[audit] cancel job=${jobId} queue=${queue || 'default'} result=${result ? 'cancelled' : 'not_found'}`);
+        logAudit(this.logger, 'job.cancelled', {
+            jobId,
+            queue: queue || 'default',
+            result: result ? 'cancelled' : 'not_found',
+        });
         return result;
     }
 }

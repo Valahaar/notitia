@@ -13,7 +13,16 @@ export class JobSchedulingService {
     ) { }
 
     async scheduleJobProcessing(scheduleRequestDto: ScheduleRequestDto): Promise<string> {
-        this.logger.log('received-job-scheduling', scheduleRequestDto);
+        this.logger.log(
+            {
+                event: 'received-job-scheduling',
+                target: scheduleRequestDto.target,
+                method: scheduleRequestDto.method,
+                schedule: scheduleRequestDto.schedule?.type ?? 'immediate',
+                queue: scheduleRequestDto.queue,
+            },
+            'received-job-scheduling',
+        );
 
         const returnedJobId = await this.jobScheduler.scheduleJob(scheduleRequestDto);
 
@@ -21,12 +30,12 @@ export class JobSchedulingService {
     }
 
     async cancelScheduledJobProcessing(jobId: string, queue?: string): Promise<boolean> {
-        this.logger.log(`received-cancel-job-scheduling: ${jobId} @ ${queue}`);
+        this.logger.log({ event: 'received-cancel-job-scheduling', jobId, queue }, 'received-cancel-job-scheduling');
         const result = await this.jobScheduler.cancelJob(jobId, queue);
         if (result) {
-            this.logger.log(`job-cancelled: ${jobId} @ ${queue}`);
+            this.logger.log({ event: 'job-cancelled', jobId, queue }, 'job-cancelled');
         } else {
-            this.logger.warn(`job-not-found: ${jobId} @ ${queue}`);
+            this.logger.warn({ event: 'job-not-found', jobId, queue }, 'job-not-found');
         }
         return result;
     }

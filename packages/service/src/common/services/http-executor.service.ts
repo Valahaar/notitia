@@ -42,7 +42,10 @@ export class HttpExecutorService {
         const sanitizedHeaders: Record<string, string> = {};
         for (const [name, value] of Object.entries(headers)) {
             if (/[\r\n]/.test(name) || /[\r\n]/.test(value)) {
-                this.logger.warn(`[${taskId}] Dropping header "${name.replace(/[\r\n]/g, '')}" — contains CRLF`);
+                this.logger.warn(
+                    { jobId: taskId, header: name.replace(/[\r\n]/g, ''), reason: 'crlf' },
+                    'Dropping header with CRLF',
+                );
                 continue;
             }
             sanitizedHeaders[name] = value;
@@ -53,7 +56,10 @@ export class HttpExecutorService {
             'X-Notitia-Task-ID': taskId,
         };
 
-        this.logger.log(`[${taskId}] Executing ${method} ${safeUrl(target)}`);
+        this.logger.log(
+            { jobId: taskId, method, target: safeUrl(target), sampleable: true },
+            'Executing',
+        );
 
         try {
             const axiosConfig: AxiosRequestConfig = {
@@ -71,7 +77,10 @@ export class HttpExecutorService {
             const response = await axios(axiosConfig);
             const duration = Date.now() - startTime;
 
-            this.logger.log(`[${taskId}] Success ${response.status} (${duration}ms)`);
+            this.logger.log(
+                { jobId: taskId, status: response.status, durationMs: duration, sampleable: true },
+                'Success',
+            );
 
             return {
                 success: true,
@@ -85,7 +94,16 @@ export class HttpExecutorService {
                 const status = error.response?.status;
                 const errorData = error.response?.data;
 
-                this.logger.error(`[${taskId}] Failed ${status || 'NETWORK'} (${duration}ms): ${error.message}${errorData ? ` - ${JSON.stringify(errorData)}` : ''}`);
+                this.logger.error(
+                    {
+                        jobId: taskId,
+                        status: status ?? 'NETWORK',
+                        durationMs: duration,
+                        error: error.message,
+                        ...(errorData ? { responseBody: errorData } : {}),
+                    },
+                    'Failed',
+                );
 
                 return {
                     success: false,
@@ -94,7 +112,15 @@ export class HttpExecutorService {
                     duration,
                 };
             } else {
-                this.logger.error(`[${taskId}] Failed UNKNOWN (${duration}ms): ${error instanceof Error ? error.message : String(error)}`);
+                this.logger.error(
+                    {
+                        jobId: taskId,
+                        status: 'UNKNOWN',
+                        durationMs: duration,
+                        error: error instanceof Error ? error.message : String(error),
+                    },
+                    'Failed',
+                );
 
                 return {
                     success: false,

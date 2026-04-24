@@ -4,6 +4,7 @@ import { readLoggerEnv } from './config';
 import { buildRedactPaths } from './redact';
 import { levelToSeverity } from './severity';
 import { makeSampler } from './sampler';
+import { parseCloudTrace } from './trace';
 
 @Module({
     imports: [
@@ -22,7 +23,13 @@ import { makeSampler } from './sampler';
                         hooks: { logMethod: makeSampler(cfg.sampleRate) },
                         customProps: (req: any) => ({
                             requestId: req.headers['x-request-id'],
-                            ...(req.traceContext ?? {}),
+                            // Parse the Cloud Trace header directly here rather than relying on
+                            // TraceContextMiddleware, because pino-http fires before NestJS
+                            // module-registered middleware runs.
+                            ...parseCloudTrace(
+                                req.headers['x-cloud-trace-context'] as string | undefined,
+                                process.env.GCP_PROJECT_ID,
+                            ),
                         }),
                         ...(cfg.includeSource
                             ? {

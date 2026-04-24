@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, Module, Controller, Get } from '@nestjs/common';
 import { Logger as PinoLogger, LoggerModule as PinoLoggerModule } from 'nestjs-pino';
 import * as request from 'supertest';
+import { v4 as uuidv4 } from 'uuid';
 import { buildRedactPaths } from './redact';
 import { levelToSeverity } from './severity';
 import { makeSampler } from './sampler';
@@ -43,13 +44,20 @@ class TestController {
                 formatters: { level: (label: string) => ({ severity: levelToSeverity(label) }) },
                 redact: { paths: buildRedactPaths(''), censor: '[REDACTED]' },
                 hooks: { logMethod: makeSampler(1.0) },
-                customProps: (req: any) => ({
-                    requestId: req.headers['x-request-id'],
-                    ...parseCloudTrace(
-                        req.headers['x-cloud-trace-context'] as string | undefined,
-                        process.env.GCP_PROJECT_ID,
-                    ),
-                }),
+                customProps: (req: any) => {
+                    let requestId = req.headers['x-request-id'] as string | undefined;
+                    if (!requestId) {
+                        requestId = uuidv4();
+                        req.headers['x-request-id'] = requestId;
+                    }
+                    return {
+                        requestId,
+                        ...parseCloudTrace(
+                            req.headers['x-cloud-trace-context'] as string | undefined,
+                            process.env.GCP_PROJECT_ID,
+                        ),
+                    };
+                },
             },
         }),
     ],
@@ -155,5 +163,14 @@ describe('Logger integration', () => {
         const joined = captured.join('');
         expect(joined).not.toContain('SHOULD_NOT_APPEAR');
         expect(joined).toContain('[REDACTED]');
+    });
+
+    it('generates a requestId when the client does not send X-Request-ID', async () => {
+        const response = await request(app.getHttpServer()).get('/ping').expect(200);
+        const returnedId = response.headers['x-request-id'];
+        expect(typeof returnedId).toBe('string');
+        expect(returnedId.length).toBeGreaterThan(10);
+        // Verify the generated ID looks like a UUID (8-4-4-4-12 hex digits pattern)
+        expect(returnedId).toMatch(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i);
     });
 });

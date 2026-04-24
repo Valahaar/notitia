@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
+import { v4 as uuidv4 } from 'uuid';
 import { readLoggerEnv } from './config';
 import { buildRedactPaths } from './redact';
 import { levelToSeverity } from './severity';
@@ -21,16 +22,27 @@ import { parseCloudTrace } from './trace';
                         },
                         redact: { paths: buildRedactPaths(cfg.redactEnv), censor: '[REDACTED]' },
                         hooks: { logMethod: makeSampler(cfg.sampleRate) },
-                        customProps: (req: any) => ({
-                            requestId: req.headers['x-request-id'],
-                            // Parse the Cloud Trace header directly here rather than relying on
-                            // TraceContextMiddleware, because pino-http fires before NestJS
-                            // module-registered middleware runs.
-                            ...parseCloudTrace(
-                                req.headers['x-cloud-trace-context'] as string | undefined,
-                                process.env.GCP_PROJECT_ID,
-                            ),
-                        }),
+                        customProps: (req: any) => {
+                            // pino-http's middleware runs before AppModule.configure() middleware,
+                            // so RequestIdMiddleware hasn't set the header yet when this fires.
+                            // Generate the ID here so logs are correlated; write it back so
+                            // RequestIdMiddleware reuses the same value on the response header.
+                            let requestId = req.headers['x-request-id'] as string | undefined;
+                            if (!requestId) {
+                                requestId = uuidv4();
+                                req.headers['x-request-id'] = requestId;
+                            }
+                            return {
+                                requestId,
+                                // Parse the Cloud Trace header directly here rather than relying on
+                                // TraceContextMiddleware, because pino-http fires before NestJS
+                                // module-registered middleware runs.
+                                ...parseCloudTrace(
+                                    req.headers['x-cloud-trace-context'] as string | undefined,
+                                    process.env.GCP_PROJECT_ID,
+                                ),
+                            };
+                        },
                         ...(cfg.includeSource
                             ? {
                                   mixin: () => {

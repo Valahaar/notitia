@@ -4,6 +4,8 @@
 **/build
 **/.yarn/install-state.gz
 
+.worktrees/
+
 **/.env
 **/__pycache__
 **/*.pyc

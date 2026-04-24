@@ -13,12 +13,18 @@ export class MetaService {
     ) { }
 
     async processMetaJob(ufid: string, originalRequest: ScheduleRequestDto & { isOccurrence: boolean }, queueName?: string): Promise<void> {
-        this.logger.log(`[${ufid}] Processing meta-job (isOccurrence: ${originalRequest.isOccurrence}) -> ${safeUrl(originalRequest.target)}`);
+        this.logger.log(
+            { ufid, isOccurrence: originalRequest.isOccurrence, target: safeUrl(originalRequest.target) },
+            'Processing meta-job',
+        );
         const queue = this.gcpTaskScheduler.getQueueName(queueName ?? originalRequest.queue);
 
         const cachedGcpTaskId = await this.gcpTaskScheduler.getIdFromUfid(ufid, queueName);
         if (!cachedGcpTaskId) {
-            this.logger.warn(`[${ufid}] UFID not found in cache (queue: ${queue}), meta-job might be stale`);
+            this.logger.warn(
+                { ufid, queue },
+                'UFID not found in cache, meta-job might be stale',
+            );
             return;
         }
 
@@ -43,14 +49,23 @@ export class MetaService {
                 // running recurrence, so we need to re-schedule the meta-job
                 const newMetaGcpTaskId = await this.gcpTaskScheduler.createMetaEndpointTask(ufid, { ...originalRequest, isOccurrence: nextIsOccurrence }, nextExecutionTime!);
                 if (!newMetaGcpTaskId) {
-                    this.logger.error(`[${queue}:${ufid}] Failed to re-schedule meta-job. UFID cache not updated.`);
+                    this.logger.error(
+                        { queue, ufid },
+                        'Failed to re-schedule meta-job. UFID cache not updated.',
+                    );
                     throw new InternalServerErrorException(`[${ufid}] Failed to re-schedule meta-job.`);
                 } else {
                     await this.gcpTaskScheduler.setIdForUfid(ufid, newMetaGcpTaskId);
-                    this.logger.log(`[${ufid}] Re-scheduled recurring meta-job. GCP Task ID: ${newMetaGcpTaskId}`);
+                    this.logger.log(
+                        { ufid, gcpTaskId: newMetaGcpTaskId },
+                        'Re-scheduled recurring meta-job',
+                    );
                 }
             } else {
-                this.logger.log(`[${ufid}] Recurring job complete, clearing cache`);
+                this.logger.log(
+                    { ufid },
+                    'Recurring job complete, clearing cache',
+                );
                 await this.gcpTaskScheduler.delUfid(ufid);
             }
 
@@ -71,9 +86,15 @@ export class MetaService {
             const newTaskId = await this.gcpTaskScheduler.createRelayEndpointTask(requestWithTaskId, nextExecutionTime);
             if (newTaskId) {
                 await this.gcpTaskScheduler.setIdForUfid(ufid, newTaskId);
-                this.logger.log(`[${ufid}] Scheduled actual relayed task. New GCP task ID: ${newTaskId}`);
+                this.logger.log(
+                    { ufid, gcpTaskId: newTaskId },
+                    'Scheduled actual relayed task',
+                );
             } else {
-                this.logger.error(`[${ufid}] Failed to schedule actual relayed task. UFID cache not updated.`);
+                this.logger.error(
+                    { ufid },
+                    'Failed to schedule actual relayed task. UFID cache not updated.',
+                );
                 throw new InternalServerErrorException(`[${ufid}] Failed to schedule actual relayed task.`);
             }
         } else {
@@ -81,9 +102,15 @@ export class MetaService {
             const newMetaGcpTaskId = await this.gcpTaskScheduler.createMetaEndpointTask(ufid, { ...originalRequest, isOccurrence: nextIsOccurrence }, nextExecutionTime!);
             if (newMetaGcpTaskId) {
                 await this.gcpTaskScheduler.setIdForUfid(ufid, newMetaGcpTaskId);
-                this.logger.log(`[${ufid}] Re-scheduled meta-job. New GCP meta task ID: ${newMetaGcpTaskId}`);
+                this.logger.log(
+                    { ufid, gcpTaskId: newMetaGcpTaskId },
+                    'Re-scheduled meta-job',
+                );
             } else {
-                this.logger.error(`[${ufid}] Failed to re-schedule meta-job. UFID cache not updated.`);
+                this.logger.error(
+                    { ufid },
+                    'Failed to re-schedule meta-job. UFID cache not updated.',
+                );
                 throw new InternalServerErrorException(`[${ufid}] Failed to re-schedule meta-job.`);
             }
         }

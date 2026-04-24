@@ -30,7 +30,10 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         // This is important for recurring jobs where scheduleNextRecurringInstance might be called multiple times
         // for the same conceptual recurring job, but we only want one active timeout for it.
         if (this.jobs.has(jobId)) {
-            this.logger.warn(`[${jobId}] Job with this ID already exists. Cancelling previous one before scheduling new one.`);
+            this.logger.warn(
+                { jobId },
+                'Job with this ID already exists. Cancelling previous one before scheduling new one.',
+            );
             this.clearJob(jobId);
         }
 
@@ -41,7 +44,10 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         } else if (scheduleType === ScheduleType.RECURRING) {
             this.handleRecurringSchedule(jobId, request as ScheduleRequestDto<RecurringScheduleDto>);
         } else {
-            this.logger.warn(`[${jobId}] Unsupported schedule type: ${scheduleType}`);
+            this.logger.warn(
+                { jobId, scheduleType },
+                'Unsupported schedule type',
+            );
         }
         return jobId; // Return the jobId (UUID in this case)
     }
@@ -54,7 +60,10 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         if (delay <= 0) {
             this.executeJob(jobId, request);
         } else {
-            this.logger.log(`[${jobId}] Scheduled for ${targetTime.toISOString()} -> ${safeUrl(request.target)}`);
+            this.logger.log(
+                { jobId, scheduledFor: targetTime.toISOString(), target: safeUrl(request.target) },
+                'Job scheduled',
+            );
             const timeoutId = setTimeout(() => {
                 this.executeJob(jobId, request);
                 this.jobs.delete(jobId);
@@ -79,22 +88,34 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         try {
             nextOccurrence = this.scheduleHelperService.calculateNextOccurrence(originalRecurringRequest.schedule!.schedule, now);
         } catch (err) {
-            this.logger.error(`[${jobId}] Error calculating next occurrence for recurring schedule [${originalRecurringRequest.schedule!.schedule}] for target ${safeUrl(originalRecurringRequest.target)}: ${err}`);
+            this.logger.error(
+                { jobId, scheduleString: originalRecurringRequest.schedule!.schedule, target: safeUrl(originalRecurringRequest.target), error: String(err) },
+                'Error calculating next occurrence for recurring schedule',
+            );
             this.jobs.delete(jobId); // Stop trying if schedule is bad
             return;
         }
 
         if (nextOccurrence) {
             const delay = nextOccurrence.getTime() - now.getTime();
-            this.logger.log(`[${jobId}] Next recurring instance at ${nextOccurrence.toISOString()} -> ${safeUrl(originalRecurringRequest.target)}`);
+            this.logger.log(
+                { jobId, nextOccurrence: nextOccurrence.toISOString(), target: safeUrl(originalRecurringRequest.target) },
+                'Next recurring instance scheduled',
+            );
 
             if (delay < 0) {
-                this.logger.warn(`[${jobId}] Next occurrence is in the past, finding next future occurrence`);
+                this.logger.warn(
+                    { jobId },
+                    'Next occurrence is in the past, finding next future occurrence',
+                );
                 const futureOccurrence = this.findNextFutureOccurrence(originalRecurringRequest.schedule!.schedule, now);
                 if (futureOccurrence) {
                     this.scheduleNextRecurringInstanceWithDate(jobId, originalRecurringRequest, futureOccurrence);
                 } else {
-                    this.logger.log(`[${jobId}] No more future occurrences, removing recurring job`);
+                    this.logger.log(
+                        { jobId },
+                        'No more future occurrences, removing recurring job',
+                    );
                     this.jobs.delete(jobId);
                 }
                 return;
@@ -109,11 +130,17 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
             if (jobData) {
                 jobData.timeoutId = timeoutId;
             } else {
-                this.logger.error(`[${jobId}] Job data not found when setting timeout, creating new entry`);
+                this.logger.error(
+                    { jobId },
+                    'Job data not found when setting timeout, creating new entry',
+                );
                 this.jobs.set(jobId, { timeoutId, originalRequest: originalRecurringRequest, isRecurring: true });
             }
         } else {
-            this.logger.log(`[${jobId}] No more occurrences, removing recurring job`);
+            this.logger.log(
+                { jobId },
+                'No more occurrences, removing recurring job',
+            );
             this.jobs.delete(jobId);
         }
     }
@@ -122,7 +149,10 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         try {
             return this.scheduleHelperService.calculateNextOccurrence(scheduleString, fromDate, false);
         } catch (err) {
-            this.logger.error(`Error finding next future occurrence for schedule '${scheduleString}' using ScheduleHelperService: ${err}`);
+            this.logger.error(
+                { scheduleString, error: String(err) },
+                'Error finding next future occurrence for schedule',
+            );
             return null;
         }
     }
@@ -132,12 +162,18 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         const delay = nextOccurrence.getTime() - now.getTime();
 
         if (delay < 0) {
-            this.logger.error(`[${jobId}] Adjusted delay still negative, aborting recurring job`);
+            this.logger.error(
+                { jobId },
+                'Adjusted delay still negative, aborting recurring job',
+            );
             this.jobs.delete(jobId);
             return;
         }
 
-        this.logger.log(`[${jobId}] Adjusted next instance at ${nextOccurrence.toISOString()} -> ${safeUrl(originalRecurringRequest.target)}`);
+        this.logger.log(
+            { jobId, nextOccurrence: nextOccurrence.toISOString(), target: safeUrl(originalRecurringRequest.target) },
+            'Adjusted next recurring instance scheduled',
+        );
 
         const timeoutId = setTimeout(() => {
             this.executeJob(jobId + '-' + new Date().getTime(), originalRecurringRequest);
@@ -148,7 +184,10 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         if (jobData) {
             jobData.timeoutId = timeoutId;
         } else {
-            this.logger.error(`[${jobId}] Job data not found when setting adjusted timeout`);
+            this.logger.error(
+                { jobId },
+                'Job data not found when setting adjusted timeout',
+            );
             this.jobs.set(jobId, { timeoutId, originalRequest: originalRecurringRequest, isRecurring: true });
         }
     }
@@ -169,22 +208,34 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
 
             if (!result.success && attempt < maxRetries) {
                 const delay = Math.min(1000 * 2 ** (attempt - 1), 8000); // 1s, 2s, 4s
-                this.logger.warn(`[${jobId}] Execution failed (status: ${result.status}), retrying in ${delay}ms (attempt ${attempt}/${maxRetries})`);
+                this.logger.warn(
+                { jobId, status: result.status, delayMs: delay, attempt, maxRetries },
+                'Execution failed, retrying',
+            );
                 setTimeout(() => this.executeJob(jobId, request, attempt + 1), delay);
             }
         } catch (error) {
             if (attempt < maxRetries) {
                 const delay = Math.min(1000 * 2 ** (attempt - 1), 8000);
-                this.logger.warn(`[${jobId}] Execution threw error, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})`);
+                this.logger.warn(
+                    { jobId, delayMs: delay, attempt, maxRetries },
+                    'Execution threw error, retrying',
+                );
                 setTimeout(() => this.executeJob(jobId, request, attempt + 1), delay);
             } else {
-                this.logger.error(`[${jobId}] Job execution failed after ${maxRetries} attempts`);
+                this.logger.error(
+                    { jobId, maxRetries },
+                    'Job execution failed after max retries',
+                );
             }
         }
     }
 
     async cancelJob(jobId: string): Promise<boolean> {
-        this.logger.log(`[${jobId}] Attempting to cancel job.`);
+        this.logger.log(
+            { jobId },
+            'Attempting to cancel job',
+        );
         return this.clearJob(jobId);
     }
 
@@ -195,10 +246,16 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
                 clearTimeout(job.timeoutId);
             }
             this.jobs.delete(jobId);
-            this.logger.log(`[${jobId}] Job cancelled and removed.`);
+            this.logger.log(
+                { jobId },
+                'Job cancelled and removed',
+            );
             return true;
         }
-        this.logger.warn(`[${jobId}] Job not found for cancellation.`);
+        this.logger.warn(
+            { jobId },
+            'Job not found for cancellation',
+        );
         return false;
     }
 

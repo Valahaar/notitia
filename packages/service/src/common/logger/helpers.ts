@@ -8,7 +8,7 @@ export function logAudit(
     event: string,
     fields: Record<string, unknown>,
 ): void {
-    logger.log({ audit: true, event, ...fields }, event);
+    logger.log({ ...fields, audit: true, event }, event);
 }
 
 export function logError(
@@ -20,10 +20,10 @@ export function logError(
     const stack_trace = err instanceof Error ? err.stack : undefined;
     logger.error(
         {
+            ...fields,
             '@type': ERROR_REPORTING_TYPE,
             message,
             ...(stack_trace ? { stack_trace } : {}),
-            ...fields,
         },
         message,
     );

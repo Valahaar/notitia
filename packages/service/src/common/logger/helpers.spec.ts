@@ -54,3 +54,27 @@ describe('logError', () => {
         expect(payload['@type']).toBe(ERROR_REPORTING_TYPE);
     });
 });
+
+describe('reserved-key protection', () => {
+    it('logAudit: caller-supplied audit/event cannot override reserved values', () => {
+        const logger = makeLogger();
+        logAudit(logger as any, 'job.scheduled', { audit: false, event: 'spoofed' } as any);
+        const payload = logger.captured[0].args[0] as Record<string, unknown>;
+        expect(payload.audit).toBe(true);
+        expect(payload.event).toBe('job.scheduled');
+    });
+
+    it('logError: caller-supplied @type/message/stack_trace cannot override reserved values', () => {
+        const logger = makeLogger();
+        logError(logger as any, new Error('real'), {
+            '@type': 'wrong',
+            message: 'wrong',
+            stack_trace: 'wrong',
+        });
+        const payload = logger.captured[0].args[0] as Record<string, unknown>;
+        expect(payload['@type']).toBe(ERROR_REPORTING_TYPE);
+        expect(payload.message).toBe('real');
+        expect(typeof payload.stack_trace).toBe('string');
+        expect(payload.stack_trace).toContain('Error: real');
+    });
+});

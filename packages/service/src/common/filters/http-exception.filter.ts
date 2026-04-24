@@ -31,7 +31,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
             ...(status === HttpStatus.BAD_REQUEST && request.body && Object.keys(request.body).length > 0 && { body: request.body }),
         };
 
-        logError(this.logger, exception, {
+        const logFields = {
             status,
             path: request.url,
             method: request.method,
@@ -39,7 +39,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
             ...(status === HttpStatus.BAD_REQUEST && request.body && Object.keys(request.body).length > 0
                 ? { requestBody: request.body }
                 : {}),
-        });
+        };
+
+        // Only route 5xx to Cloud Error Reporting; 4xx are expected client errors.
+        if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+            logError(this.logger, exception, logFields);
+        } else {
+            this.logger.error(logFields, exception.message);
+        }
 
         response.status(status).json(errorResponse);
     }

@@ -34,7 +34,7 @@ All validated at startup; invalid values fail the bootstrap with a descriptive e
 - `this.logger.log('msg')` — legacy form, still works.
 - `this.logger.log({ field: value }, 'msg')` — preferred for new code.
 - `logAudit(this.logger, 'job.scheduled', { jobId, ... })` — business events.
-- `logError(this.logger, err, { jobId, ... })` — error-level with stack.
+- `logError(this.logger, err, { jobId, ... })` — error-level with stack. Use only for genuine server errors; it stamps the Cloud Error Reporting `@type` and would otherwise flood incidents with expected failures. `HttpExceptionFilter` gates this on `status >= 500`; 4xx log via `this.logger.error(...)` without the marker.
 - Tag `sampleable: true` only on high-volume success logs (currently only `HttpExecutorService` `Executing` / `Success` pair).
 
 ## Key files

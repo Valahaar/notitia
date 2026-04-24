@@ -28,17 +28,23 @@ import { makeSampler } from './sampler';
                             ? {
                                   mixin: () => {
                                       const err = new Error();
-                                      const frame = (err.stack ?? '').split('\n')[3] ?? '';
-                                      const match = /at\s+(\S+)\s+\(([^:]+):(\d+):\d+\)/.exec(frame);
-                                      return match
-                                          ? {
-                                                'logging.googleapis.com/sourceLocation': {
-                                                    function: match[1],
-                                                    file: match[2],
-                                                    line: match[3],
-                                                },
-                                            }
-                                          : {};
+                                      const lines = (err.stack ?? '').split('\n').slice(1); // drop "Error"
+                                      const skipPatterns = ['/pino/', '/pino-http/', '/nestjs-pino/', '/logger.module.', '/sampler.'];
+                                      const frameRe = /at\s+(\S+)\s+\(([^:]+):(\d+):\d+\)/;
+                                      for (const line of lines) {
+                                          const match = frameRe.exec(line);
+                                          if (!match) continue;
+                                          const [, fn, file, lineNo] = match;
+                                          if (skipPatterns.some((p) => file.includes(p))) continue;
+                                          return {
+                                              'logging.googleapis.com/sourceLocation': {
+                                                  function: fn,
+                                                  file,
+                                                  line: lineNo,
+                                              },
+                                          };
+                                      }
+                                      return {};
                                   },
                               }
                             : {}),

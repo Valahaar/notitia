@@ -36,6 +36,8 @@ All validated at startup; invalid values fail the bootstrap with a descriptive e
 - `logAudit(this.logger, 'job.scheduled', { jobId, ... })` — business events.
 - `logError(this.logger, err, { jobId, ... })` — error-level with stack. Use only for genuine server errors; it stamps the Cloud Error Reporting `@type` and would otherwise flood incidents with expected failures. `HttpExceptionFilter` gates this on `status >= 500`; 4xx log via `this.logger.error(...)` without the marker.
 - Tag `sampleable: true` only on high-volume success logs (currently only `HttpExecutorService` `Executing` / `Success` pair).
+- Failure-path logs must be self-contained: include `target` (via `safeUrl`), `method`, and any identifiers needed to debug the failure without correlating to a sibling log. The success-path entry log may be sampled away, so do not rely on `taskId`/`requestId` correlation alone.
+- For HTTP failures from downstream services (`HttpExecutorService`), log: `status`, `statusText`, `errorCode` (axios code like `ECONNABORTED`), `durationMs`, `responseContentType`, `downstreamRequestId` (from `x-request-id` / `x-cloud-trace-context`), and the response body via `normalizeResponseBody` — which emits `<empty>` for missing bodies and truncates at 4 KB with `responseBodyTruncated: true`.
 
 ## Key files
 

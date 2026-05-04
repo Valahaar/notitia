@@ -3,6 +3,34 @@ import { ConfigService } from '@nestjs/config';
 import axios, { AxiosRequestConfig, Method } from 'axios';
 import { HttpMethod } from '../dto/schedule-request.dto';
 import { safeUrl } from '../utils/log.util';
+import { logError } from '../logger/helpers';
+
+const RESPONSE_BODY_LOG_LIMIT = 4096;
+
+function normalizeResponseBody(data: unknown): { responseBody: string; responseBodyTruncated?: true } | { responseBody: '<empty>' } {
+    if (data === undefined || data === null || data === '') {
+        return { responseBody: '<empty>' };
+    }
+    let serialized: string;
+    if (typeof data === 'string') {
+        serialized = data;
+    } else if (Buffer.isBuffer(data)) {
+        serialized = data.toString('utf8');
+    } else {
+        try {
+            serialized = JSON.stringify(data);
+        } catch {
+            serialized = String(data);
+        }
+    }
+    if (serialized.length > RESPONSE_BODY_LOG_LIMIT) {
+        return {
+            responseBody: serialized.slice(0, RESPONSE_BODY_LOG_LIMIT),
+            responseBodyTruncated: true,
+        };
+    }
+    return { responseBody: serialized };
+}
 
 export interface HttpExecutionRequest {
     taskId: string;
@@ -92,15 +120,25 @@ export class HttpExecutorService {
 
             if (axios.isAxiosError(error)) {
                 const status = error.response?.status;
-                const errorData = error.response?.data;
+                const responseHeaders = error.response?.headers;
+                const contentType = responseHeaders?.['content-type'] as string | undefined;
+                const downstreamRequestId =
+                    (responseHeaders?.['x-request-id'] as string | undefined) ??
+                    (responseHeaders?.['x-cloud-trace-context'] as string | undefined);
 
                 this.logger.error(
                     {
                         jobId: taskId,
+                        target: safeUrl(target),
+                        method,
                         status: status ?? 'NETWORK',
+                        statusText: error.response?.statusText,
+                        errorCode: error.code,
                         durationMs: duration,
                         error: error.message,
-                        ...(errorData ? { responseBody: errorData } : {}),
+                        ...(contentType ? { responseContentType: contentType } : {}),
+                        ...(downstreamRequestId ? { downstreamRequestId } : {}),
+                        ...normalizeResponseBody(error.response?.data),
                     },
                     'Failed',
                 );
@@ -112,15 +150,13 @@ export class HttpExecutorService {
                     duration,
                 };
             } else {
-                this.logger.error(
-                    {
-                        jobId: taskId,
-                        status: 'UNKNOWN',
-                        durationMs: duration,
-                        error: error instanceof Error ? error.message : String(error),
-                    },
-                    'Failed',
-                );
+                logError(this.logger, error, {
+                    jobId: taskId,
+                    target: safeUrl(target),
+                    method,
+                    status: 'UNKNOWN',
+                    durationMs: duration,
+                });
 
                 return {
                     success: false,

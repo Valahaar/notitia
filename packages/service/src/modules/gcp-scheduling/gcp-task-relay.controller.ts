@@ -49,7 +49,15 @@ export class GcpTaskRelayController {
             const message = error instanceof Error ? error.message : String(error);
 
             this.logger.error(
-                { taskId, error: message },
+                {
+                    taskId,
+                    taskName,
+                    retry: retryCount,
+                    target: safeUrl(payload.target),
+                    method: payload.method,
+                    status,
+                    error: message,
+                },
                 'Relay failed',
             );
 

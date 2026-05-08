@@ -6,7 +6,6 @@ WORKDIR /usr/src/app
 RUN corepack enable
 
 COPY package.json yarn.lock .yarnrc.yml ./
-COPY .yarn ./.yarn
 
 # Install ONLY production deps (Yarn 4 workspace-tools plugin).
 RUN yarn workspaces focus --production
@@ -19,7 +18,6 @@ WORKDIR /usr/src/app
 RUN corepack enable
 
 COPY package.json yarn.lock .yarnrc.yml ./
-COPY .yarn ./.yarn
 
 RUN yarn install --immutable
 

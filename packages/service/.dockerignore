@@ -4,19 +4,30 @@ dist
 Dockerfile
 .dockerignore
 
-# Git files
+# Git
 .git
 .gitignore
 
-# Development files
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+
+# Logs / env
 *.log
 .env
 .env.*
-!\.env.example
+!.env.example
 
-# Test files if not needed in production image
-# test
-# coverage
-# jest.config.js
-# jest-e2e.json
-# **/*spec.ts
+# Tests + coverage (not needed in image)
+test
+coverage
+**/*.spec.ts
+**/*.test.ts
+jest.config.*
+jest-e2e.*
+
+# Docs / metadata
+README.md
+SECURITY_AUDIT.md
+docs

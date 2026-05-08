@@ -20,7 +20,12 @@ const generateNumericId = (length: number = 19): string => {
 @Injectable()
 export class GcpTaskSchedulerService implements IJobScheduler {
     private readonly logger = new Logger(GcpTaskSchedulerService.name);
-    private cloudTasksClient: CloudTasksClient;
+    // Held as a promise so the constructor returns immediately. Building a
+    // CloudTasksClient synchronously loads gRPC + proto descriptors, which is
+    // ~100s of ms; deferring it keeps that off the Nest bootstrap chain.
+    // Callers go through getClient() and await on first use — by which point
+    // the promise has typically already resolved.
+    private cloudTasksClient: Promise<CloudTasksClient>;
     private gcpProject: string;
     private gcpLocation: string;
     private gcpJobQueue: string; // For tasks targeting /relay
@@ -57,7 +62,14 @@ export class GcpTaskSchedulerService implements IJobScheduler {
             this.serviceUrl += '/';
         }
 
-        this.cloudTasksClient = new CloudTasksClient();
+        this.cloudTasksClient = Promise.resolve().then(() => new CloudTasksClient());
+        this.cloudTasksClient.catch((err) => {
+            this.logger.error({ err }, 'Failed to initialize CloudTasksClient');
+        });
+    }
+
+    private getClient(): Promise<CloudTasksClient> {
+        return this.cloudTasksClient;
     }
 
     getQueueName(queueName?: string): string {
@@ -84,15 +96,17 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         return `gcp_job:${this.getQueueName(queueName)}:${jobId}`;
     }
 
-    private getQueuePath(queueName: string): string {
-        return this.cloudTasksClient.queuePath(this.gcpProject, this.gcpLocation, queueName);
+    private async getQueuePath(queueName: string): Promise<string> {
+        const client = await this.getClient();
+        return client.queuePath(this.gcpProject, this.gcpLocation, queueName);
     }
 
-    private getTaskPath(queueName: string, taskName: string): string {
+    private async getTaskPath(queueName: string, taskName: string): Promise<string> {
         // Task names must be unique within a queue. They can be up to 500 characters.
         // Allowed characters: A-Z, a-z, 0-9, hyphen (-), underscore (_).
         // For direct tasks, we might use the generated ID. For meta tasks, the UFID.
-        return this.cloudTasksClient.taskPath(this.gcpProject, this.gcpLocation, queueName, taskName);
+        const client = await this.getClient();
+        return client.taskPath(this.gcpProject, this.gcpLocation, queueName, taskName);
     }
 
     public async createTask(queueName: string, url: string, payload: any, scheduleTime?: Date, taskName?: string, timeoutSeconds?: number): Promise<string> {
@@ -117,7 +131,7 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         };
 
         if (taskName) {
-            task.name = this.getTaskPath(queueName, taskName);
+            task.name = await this.getTaskPath(queueName, taskName);
         }
 
         if (scheduleTime) {
@@ -132,7 +146,8 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         }
 
         try {
-            const [response] = await this.cloudTasksClient.createTask({ parent: this.getQueuePath(queueName), task });
+            const [client, parent] = await Promise.all([this.getClient(), this.getQueuePath(queueName)]);
+            const [response] = await client.createTask({ parent, task });
             return response.name?.split('/').at(-1)!;
         } catch (error: any) {
             if (error.hasOwnProperty('code') && error.hasOwnProperty('details')) {
@@ -304,9 +319,9 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         const queue = gcpTaskIdFromCache ? this.getMetaQueueName(qName) : qName;
         const actualJobId = gcpTaskIdFromCache || jobId;
 
-        const name = this.getTaskPath(queue, actualJobId);
+        const [client, name] = await Promise.all([this.getClient(), this.getTaskPath(queue, actualJobId)]);
 
-        const successful = await this.cloudTasksClient.deleteTask({ name }).then(() => true).catch((err) => {
+        const successful = await client.deleteTask({ name }).then(() => true).catch((err) => {
             if (err.code === 5) { // NOT_FOUND error code from GCP
                 this.logger.warn(
                     { jobId, taskName: name },

@@ -97,3 +97,20 @@ def _backoff_delay(attempt: int, cfg: RetryConfig) -> float:
     if cfg.jitter == "full":
         return random.uniform(0, capped)
     return capped / 2 + random.uniform(0, capped / 2)
+
+
+def _compute_delay(
+    response: httpx.Response, attempt: int, cfg: RetryConfig
+) -> Optional[float]:
+    """Return delay in seconds, or None if server-supplied delay exceeds cap.
+
+    On 429, server-supplied headers (Retry-After / RateLimit-Reset /
+    X-RateLimit-Reset) take precedence over computed backoff. On any
+    other retryable status, exponential backoff is always used."""
+    if response.status_code == 429:
+        server_delay = _parse_rate_limit_headers(response)
+        if server_delay is not None:
+            if server_delay > cfg.max_retry_after:
+                return None
+            return server_delay
+    return _backoff_delay(attempt, cfg)

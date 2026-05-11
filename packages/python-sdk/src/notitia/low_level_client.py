@@ -1,10 +1,12 @@
+import asyncio
 from json import JSONDecodeError
 import httpx
-from typing import Optional, Any
+from typing import Any, Awaitable, Callable, Optional
 from dataclasses import asdict
 
 from .types import NotitiaClientConfig
 from .common_types import ScheduleRequest, HttpMethod, ScheduleType
+from .retry import _compute_delay
 
 
 class NotitiaError(Exception):
@@ -47,6 +49,33 @@ class LowLevelClient:
         self._http_client = httpx.AsyncClient(
             headers=self.default_headers, timeout=config.timeout
         )
+        self.retry_config = config.retry
+
+    async def _send_with_retries(
+        self,
+        attempt_fn: Callable[[], Awaitable[httpx.Response]],
+    ) -> httpx.Response:
+        """Drive a retry loop around a single-attempt closure.
+
+        Returns the final response — caller is responsible for interpreting
+        status codes. Network errors raised by attempt_fn propagate."""
+        cfg = self.retry_config
+        response: httpx.Response | None = None
+        for attempt in range(1, cfg.max_attempts + 1):
+            response = await attempt_fn()
+
+            if response.status_code not in cfg.retry_status_codes:
+                return response
+            if attempt == cfg.max_attempts:
+                return response
+
+            delay = _compute_delay(response, attempt, cfg)
+            if delay is None:
+                return response
+            await asyncio.sleep(delay)
+
+        assert response is not None  # loop runs at least once
+        return response
 
     async def send_schedule_request(self, schedule_request: ScheduleRequest) -> str:
         """

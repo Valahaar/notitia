@@ -1,6 +1,7 @@
 import pytest
 
 from notitia.retry import RetryConfig
+from notitia.types import NotitiaClientConfig
 
 
 def test_defaults():
@@ -23,9 +24,6 @@ def test_override_fields():
     cfg = RetryConfig(max_attempts=1, jitter="none")
     assert cfg.max_attempts == 1
     assert cfg.jitter == "none"
-
-
-from notitia.types import NotitiaClientConfig
 
 
 def test_client_config_has_retry_default():

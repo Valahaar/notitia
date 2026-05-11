@@ -1,7 +1,9 @@
 import email.utils
 import time
 
-from notitia.retry import _parse_retry_after
+import httpx
+
+from notitia.retry import _parse_rate_limit_headers, _parse_retry_after
 
 
 def test_integer_seconds():
@@ -42,11 +44,6 @@ def test_http_date_past():
 
 def test_whitespace_stripped():
     assert _parse_retry_after("  10  ") == 10.0
-
-
-import httpx
-
-from notitia.retry import _parse_rate_limit_headers
 
 
 def _resp(headers: dict) -> httpx.Response:

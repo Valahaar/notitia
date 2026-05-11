@@ -1,5 +1,7 @@
+import email.utils
+import time
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Optional
 
 
 @dataclass(frozen=True)
@@ -27,3 +29,22 @@ class RetryConfig:
         default_factory=lambda: frozenset({429, 500, 502, 503, 504})
     )
     """Status codes that trigger a retry."""
+
+
+def _parse_retry_after(value: str) -> Optional[float]:
+    """Parse a Retry-After header value (seconds or HTTP-date) into seconds.
+
+    Returns None if the value cannot be parsed. May return a negative number
+    for past dates; the caller is responsible for filtering."""
+    value = value.strip()
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    try:
+        parsed = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed is None:
+        return None
+    return parsed.timestamp() - time.time()

@@ -21,6 +21,9 @@ from .types import (
     EventDefinitions,
 )
 
+# Export retry configuration
+from .retry import RetryConfig
+
 __all__ = [
     "NotitiaClient",
     "LowLevelClient",
@@ -36,5 +39,6 @@ __all__ = [
     "PreparedEventData",
     "EventConfig",
     "EventDefinitions",
+    "RetryConfig",
     "events",
 ]

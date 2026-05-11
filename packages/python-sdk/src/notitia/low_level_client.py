@@ -1,10 +1,12 @@
+import asyncio
 from json import JSONDecodeError
 import httpx
-from typing import Optional, Any
+from typing import Any, Awaitable, Callable, Optional
 from dataclasses import asdict
 
 from .types import NotitiaClientConfig
 from .common_types import ScheduleRequest, HttpMethod, ScheduleType
+from .retry import _compute_delay
 
 
 class NotitiaError(Exception):
@@ -47,6 +49,33 @@ class LowLevelClient:
         self._http_client = httpx.AsyncClient(
             headers=self.default_headers, timeout=config.timeout
         )
+        self.retry_config = config.retry
+
+    async def _send_with_retries(
+        self,
+        attempt_fn: Callable[[], Awaitable[httpx.Response]],
+    ) -> httpx.Response:
+        """Drive a retry loop around a single-attempt closure.
+
+        Returns the final response — caller is responsible for interpreting
+        status codes. Network errors raised by attempt_fn propagate."""
+        cfg = self.retry_config
+        response: httpx.Response | None = None
+        for attempt in range(1, cfg.max_attempts + 1):
+            response = await attempt_fn()
+
+            if response.status_code not in cfg.retry_status_codes:
+                return response
+            if attempt == cfg.max_attempts:
+                return response
+
+            delay = _compute_delay(response, attempt, cfg)
+            if delay is None:
+                return response
+            await asyncio.sleep(delay)
+
+        assert response is not None  # loop runs at least once
+        return response
 
     async def send_schedule_request(self, schedule_request: ScheduleRequest) -> str:
         """
@@ -78,11 +107,11 @@ class LowLevelClient:
         if self.default_queue and not filtered_data.get("queue"):
             filtered_data["queue"] = self.default_queue
 
+        async def _attempt() -> httpx.Response:
+            return await self._http_client.post(url, json=filtered_data)
+
         try:
-            response = await self._http_client.post(
-                url,
-                json=filtered_data,
-            )
+            response = await self._send_with_retries(_attempt)
 
             if response.status_code != 202:
                 error_data: Any = None
@@ -105,6 +134,10 @@ class LowLevelClient:
                     response_data=response_data,
                 )
             return job_id
+        except httpx.RequestError as e:
+            raise NotitiaError(
+                message=f"Failed to send emit request: {str(e)}", cause=e
+            ) from e
         except JSONDecodeError as e:
             raise NotitiaError(
                 message=f"Failed to send emit request: {str(e)}", cause=e
@@ -114,60 +147,46 @@ class LowLevelClient:
         """Closes the underlying HTTP client. Should be called when the client is no longer needed."""
         await self._http_client.aclose()
 
-    async def cancel_scheduled_job(self, job_id: str, queue: Optional[str] = None) -> bool:
+    async def cancel_scheduled_job(
+        self, job_id: str, queue: Optional[str] = None
+    ) -> bool:
         """
         Sends a request to cancel a scheduled job by its ID.
-        Args:
-            job_id: The ID of the job to cancel.
         Returns: True if the cancellation request was successfully processed by the server, False otherwise.
         Raises: NotitiaError: If the request fails or the server returns an unexpected status.
         """
         url = f"{self.base_url}/schedule/{job_id}"
         if queue:
             url += f"?queue={queue}"
-        try:
-            response = await self._http_client.delete(url)
 
-            if response.status_code == 200:
-                try:
-                    return response.json()  # Expects true or false
-                except JSONDecodeError:
-                    # If response is not JSON, but status is 200, this is unexpected.
-                    # However, the endpoint spec says it returns boolean.
-                    raise NotitiaError(
-                        message=f"Failed to decode JSON response for cancel job, but status was 200. Response: {response.text}",
-                        status=response.status_code,
-                        response_data=response.text,
-                    )
-            elif response.status_code == 404:
-                # As per docs, 404 can be treated as success for cancellation (job already gone)
-                # The controller however returns boolean true/false.
-                # For now, let's stick to what the controller returns for 200.
-                # If a 404 specifically means "not found but cancellation is 'true'", API should return 200 true.
-                # For now, treat non-200 as an issue or an unsuccessful cancellation from client's perspective.
-                error_data: Any = None
-                try:
-                    error_data = response.json()
-                except JSONDecodeError:
-                    error_data = response.text
-                raise NotitiaError(
-                    message=f"Notification service returned an error for cancel job: {response.status_code}",
-                    status=response.status_code,
-                    response_data=error_data,
-                )
-            else:  # Any other non-200 status
-                error_data: Any = None
-                try:
-                    error_data = response.json()
-                except JSONDecodeError:
-                    error_data = response.text
-                raise NotitiaError(
-                    message=f"Notification service returned an unexpected status for cancel job: {response.status_code}",
-                    status=response.status_code,
-                    response_data=error_data,
-                )
+        async def _attempt() -> httpx.Response:
+            return await self._http_client.delete(url)
+
+        try:
+            response = await self._send_with_retries(_attempt)
         except httpx.RequestError as e:
             raise NotitiaError(
                 message=f"Failed to send cancel schedule request for job {job_id}: {str(e)}",
                 cause=e,
             ) from e
+
+        if response.status_code == 200:
+            try:
+                return response.json()
+            except JSONDecodeError:
+                raise NotitiaError(
+                    message=f"Failed to decode JSON response for cancel job, but status was 200. Response: {response.text}",
+                    status=response.status_code,
+                    response_data=response.text,
+                )
+
+        error_data: Any = None
+        try:
+            error_data = response.json()
+        except JSONDecodeError:
+            error_data = response.text
+        raise NotitiaError(
+            message=f"Notification service returned an error for cancel job: {response.status_code}",
+            status=response.status_code,
+            response_data=error_data,
+        )

@@ -1,10 +1,11 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Generic, Optional, TypeVar
 
 from .common_types import (
     HttpMethod,
     Schedule,
 )
+from .retry import RetryConfig
 
 PA = TypeVar("PA")
 EventNameT = TypeVar("EventNameT", bound=str)
@@ -24,6 +25,9 @@ class NotitiaClientConfig:
 
     """Optional default queue to be used for the client."""
     default_queue: Optional[str] = None
+
+    """Retry policy for 429 / 5xx responses. Defaults to RetryConfig()."""
+    retry: RetryConfig = field(default_factory=RetryConfig)
 
 
 @dataclass

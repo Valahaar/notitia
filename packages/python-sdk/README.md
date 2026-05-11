@@ -30,6 +30,19 @@ config = NotitiaClientConfig(
 )
 ```
 
+Retries are enabled by default (up to 5 attempts with exponential back-off). To disable or tune them, pass a `RetryConfig`:
+
+```python
+from notitia import NotitiaClientConfig
+from notitia.retry import RetryConfig
+
+# Disable retries entirely
+config = NotitiaClientConfig(base_url="...", retry=RetryConfig(max_attempts=1))
+
+# Custom retry policy
+config = NotitiaClientConfig(base_url="...", retry=RetryConfig(max_attempts=3, base_delay=1.0))
+```
+
 ## Three Abstraction Levels
 
 The SDK provides three ways to interact with Notitia, from low-level to high-level:
@@ -233,6 +246,8 @@ except NotitiaError as e:
     print(e.response_data)  # Response body from the service
     print(e.cause)          # Underlying exception (if any)
 ```
+
+429 and 5xx responses are automatically retried before `NotitiaError` is raised. The retry policy is configurable via `RetryConfig` (see **Configuration** above).
 
 ## Further Reading
 

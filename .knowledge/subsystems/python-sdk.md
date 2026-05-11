@@ -25,15 +25,6 @@ Provides Python applications with a typed, async interface to schedule notificat
 - Enum fields are manually converted to `.value` strings during serialization (`dataclasses.asdict()` doesn't handle this).
 - `None` values are stripped from the serialized dict at both top-level and nested schedule level.
 
-## Test Infrastructure
-
-Tests live in `packages/python-sdk/tests/` and are run with `uv run pytest`.
-
-- **`pytest>=8.0`**, **`pytest-asyncio>=0.23`**, **`respx>=0.21`** are dev dependencies (declared in `[tool.uv]` dev-dependencies in `pyproject.toml`).
-- `asyncio_mode = "auto"` is set in `[tool.pytest.ini_options]` — async tests don't need `@pytest.mark.asyncio`.
-- **`respx`** is available for mocking `httpx` transport in integration tests.
-- Run tests: `cd packages/python-sdk && uv run pytest`
-
 ## External Dependencies
 
 - **`httpx`** — Async HTTP client (the only runtime dependency).
@@ -86,15 +77,6 @@ The SDK includes an optional events layer that provides a framework-agnostic `Ev
 
 Key integration point: `EventsBus.configure()` registers an internal `_notitia_bus_event` `EventConfig` on the user's `NotitiaClient`, using the existing `prepare()` → `emit()` flow. No changes to `NotitiaClient` or `LowLevelClient` were needed.
 
-## Retry Layer (`notitia.retry`) — in progress on `feat/client-retries`
-
-`packages/python-sdk/src/notitia/retry.py` is being built incrementally:
-
-- **`RetryConfig`** (Task 2, done) — frozen dataclass with `max_attempts`, `base_delay`, `max_delay`, `jitter` (`"equal"|"full"|"none"`), `max_retry_after`, and `retry_status_codes`.
-- **`_parse_retry_after(value: str) -> Optional[float]`** (Task 3, done) — parses `Retry-After` header values. Tries `float()` first (seconds), then `email.utils.parsedate_to_datetime()` (HTTP-date). Returns `None` on unparseable input; may return negative values for past dates (caller filters).
-
-The retry module is **not yet exported** from `__init__.py` — it is private until the full retry integration (later tasks) is complete.
-
 ## Related Files
 
 | File | Role |
@@ -104,14 +86,9 @@ The retry module is **not yet exported** from `__init__.py` — it is private un
 | `packages/python-sdk/src/notitia/low_level_client.py` | HTTP transport, serialization, error handling |
 | `packages/python-sdk/src/notitia/types.py` | `EventConfig`, `PreparedEventData` |
 | `packages/python-sdk/src/notitia/common_types.py` | `ScheduleRequest`, `Schedule`, `HttpMethod` |
-| `packages/python-sdk/src/notitia/retry.py` | `RetryConfig`, `_parse_retry_after` — retry primitives |
 | `packages/python-sdk/src/notitia/events/` | EventsBus core — bus, event enum, serialization, scheduling, state tracking |
 | `packages/python-sdk/src/notitia/contrib/` | Framework adapters — FastAPI router, Beanie state tracker |
 | `packages/python-sdk/examples/basic.py` | Simple usage example |
 | `packages/python-sdk/examples/advanced/` | Typed client with `Literal` overloads |
 | `packages/python-sdk/examples/complex/` | Full EventsBus integration example (FastAPI + Beanie) |
 | `packages/python-sdk/README.md` | SDK documentation |
-| `packages/python-sdk/tests/conftest.py` | Shared pytest fixtures |
-| `packages/python-sdk/tests/test_smoke.py` | Package import smoke test |
-| `packages/python-sdk/tests/test_retry_config.py` | `RetryConfig` unit tests |
-| `packages/python-sdk/tests/test_retry_parsing.py` | `_parse_retry_after` unit tests |

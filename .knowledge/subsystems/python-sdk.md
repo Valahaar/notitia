@@ -12,6 +12,7 @@ Provides Python applications with a typed, async interface to schedule notificat
 
 - **`NotitiaClient[EventNameT]`** (`src/notitia/typed_client.py`) — Generic high-level client parameterized by an event name type (typically an Enum). Holds a registry of `EventConfig` definitions and exposes `emit(event_name, data)` and `cancel(job_id)`.
 - **`LowLevelClient`** (`src/notitia/low_level_client.py`) — Async HTTP wrapper over `httpx.AsyncClient`. Handles serialization, auth headers, and the `POST /schedule` / `DELETE /schedule/:id` calls.
+- **`RetryConfig`** (`src/notitia/retry.py`) — Frozen dataclass holding retry policy (`max_attempts`, `base_delay`, `max_delay`, `jitter`, `max_retry_after`, `retry_status_codes`). Wired into `NotitiaClientConfig.retry` and consumed by `LowLevelClient._send_with_retries`.
 - **`NotitiaError`** (`src/notitia/low_level_client.py`) — Exception carrying message, HTTP status, response data, and optional cause.
 - **`EventConfig[PA]`** (`src/notitia/types.py`) — Per-event configuration: a `prepare` callable, default `target` URL, and default `method`.
 - **`PreparedEventData`** (`src/notitia/types.py`) — Output of `prepare()`: payload, headers, params, schedule, and optional method/target/queue overrides.
@@ -24,6 +25,7 @@ Provides Python applications with a typed, async interface to schedule notificat
 - `LowLevelClient` expects 202 for schedule success and 200 for cancel success; anything else raises `NotitiaError`.
 - Enum fields are manually converted to `.value` strings during serialization (`dataclasses.asdict()` doesn't handle this).
 - `None` values are stripped from the serialized dict at both top-level and nested schedule level.
+- `LowLevelClient` retries 429 and 5xx responses by default (5 attempts, exponential backoff with equal jitter). On 429, honors `Retry-After`, `RateLimit-Reset`, `X-RateLimit-Reset` headers (max wins, capped at 60s). Network errors are NOT retried. Retry-exhaustion surfaces as the existing `NotitiaError`.
 
 ## External Dependencies
 
@@ -70,6 +72,8 @@ Advanced usage with `Literal` overloads on a subclass provides per-event type sa
 - **404 on cancel**: Code currently raises `NotitiaError` on 404, but a comment suggests this may change to treat 404 as success (job already gone).
 - **Timeout configuration**: `NotitiaConfig.timeout` sets `httpx` timeout; defaults may be too short for slow networks.
 - **Enum string duality**: `emit()` checks `hasattr(event_name, "value")` to handle both raw strings and Enum members — callers can use either.
+- **Retry by default**: `NotitiaClientConfig` enables retries automatically. Callers that need fail-fast must set `retry=RetryConfig(max_attempts=1)`.
+- **Server delay cap**: A server-supplied retry delay above `RetryConfig.max_retry_after` (default 60s) causes the SDK to surface the 429 immediately instead of blocking.
 
 ## Events Layer (`notitia.events`)
 
@@ -86,9 +90,11 @@ Key integration point: `EventsBus.configure()` registers an internal `_notitia_b
 | `packages/python-sdk/src/notitia/low_level_client.py` | HTTP transport, serialization, error handling |
 | `packages/python-sdk/src/notitia/types.py` | `EventConfig`, `PreparedEventData` |
 | `packages/python-sdk/src/notitia/common_types.py` | `ScheduleRequest`, `Schedule`, `HttpMethod` |
+| `packages/python-sdk/src/notitia/retry.py` | `RetryConfig` and retry/backoff helpers |
 | `packages/python-sdk/src/notitia/events/` | EventsBus core — bus, event enum, serialization, scheduling, state tracking |
 | `packages/python-sdk/src/notitia/contrib/` | Framework adapters — FastAPI router, Beanie state tracker |
 | `packages/python-sdk/examples/basic.py` | Simple usage example |
 | `packages/python-sdk/examples/advanced/` | Typed client with `Literal` overloads |
 | `packages/python-sdk/examples/complex/` | Full EventsBus integration example (FastAPI + Beanie) |
+| `packages/python-sdk/tests/` | pytest unit and respx-based integration tests |
 | `packages/python-sdk/README.md` | SDK documentation |

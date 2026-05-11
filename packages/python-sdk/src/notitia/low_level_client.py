@@ -107,11 +107,11 @@ class LowLevelClient:
         if self.default_queue and not filtered_data.get("queue"):
             filtered_data["queue"] = self.default_queue
 
+        async def _attempt() -> httpx.Response:
+            return await self._http_client.post(url, json=filtered_data)
+
         try:
-            response = await self._http_client.post(
-                url,
-                json=filtered_data,
-            )
+            response = await self._send_with_retries(_attempt)
 
             if response.status_code != 202:
                 error_data: Any = None
@@ -134,6 +134,10 @@ class LowLevelClient:
                     response_data=response_data,
                 )
             return job_id
+        except httpx.RequestError as e:
+            raise NotitiaError(
+                message=f"Failed to send emit request: {str(e)}", cause=e
+            ) from e
         except JSONDecodeError as e:
             raise NotitiaError(
                 message=f"Failed to send emit request: {str(e)}", cause=e

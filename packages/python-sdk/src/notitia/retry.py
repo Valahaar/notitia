@@ -3,6 +3,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
+import httpx
+
 
 @dataclass(frozen=True)
 class RetryConfig:
@@ -48,3 +50,38 @@ def _parse_retry_after(value: str) -> Optional[float]:
     if parsed is None:
         return None
     return parsed.timestamp() - time.time()
+
+
+def _parse_rate_limit_headers(response: httpx.Response) -> Optional[float]:
+    """Return the MAX of any present, parseable rate-limit headers (seconds).
+
+    Inspects Retry-After (seconds or HTTP-date), RateLimit-Reset (seconds),
+    and X-RateLimit-Reset (Unix timestamp). Negative, zero, and garbage
+    values are skipped. Returns None when no usable value is found."""
+    candidates: list[float] = []
+
+    ra = response.headers.get("Retry-After")
+    if ra is not None:
+        parsed = _parse_retry_after(ra)
+        if parsed is not None and parsed > 0:
+            candidates.append(parsed)
+
+    rlr = response.headers.get("RateLimit-Reset")
+    if rlr is not None:
+        try:
+            v = float(rlr)
+            if v > 0:
+                candidates.append(v)
+        except ValueError:
+            pass
+
+    xrlr = response.headers.get("X-RateLimit-Reset")
+    if xrlr is not None:
+        try:
+            delta = float(xrlr) - time.time()
+            if delta > 0:
+                candidates.append(delta)
+        except ValueError:
+            pass
+
+    return max(candidates) if candidates else None

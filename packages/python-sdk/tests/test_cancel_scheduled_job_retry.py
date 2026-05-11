@@ -83,3 +83,18 @@ async def test_429_exhausts_and_raises():
     assert exc.value.status == 429
     assert sleep.await_count == 2
     await client.close()
+
+
+@respx.mock
+async def test_connect_error_raises_immediately():
+    respx.delete("http://service/schedule/abc").mock(
+        side_effect=httpx.ConnectError("nope")
+    )
+    client = _client()
+
+    with patch("asyncio.sleep") as sleep:
+        with pytest.raises(NotitiaError):
+            await client.cancel_scheduled_job("abc")
+
+    sleep.assert_not_called()
+    await client.close()

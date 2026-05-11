@@ -1,4 +1,5 @@
 import email.utils
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Literal, Optional
@@ -85,3 +86,14 @@ def _parse_rate_limit_headers(response: httpx.Response) -> Optional[float]:
             pass
 
     return max(candidates) if candidates else None
+
+
+def _backoff_delay(attempt: int, cfg: RetryConfig) -> float:
+    """Compute exponential backoff delay for the given attempt (1-indexed)."""
+    base = cfg.base_delay * (2 ** (attempt - 1))
+    capped = min(base, cfg.max_delay)
+    if cfg.jitter == "none":
+        return capped
+    if cfg.jitter == "full":
+        return random.uniform(0, capped)
+    return capped / 2 + random.uniform(0, capped / 2)

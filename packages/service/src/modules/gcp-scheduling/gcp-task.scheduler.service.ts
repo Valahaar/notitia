@@ -17,6 +17,28 @@ const generateNumericId = (length: number = 19): string => {
     return Array.from({ length }, () => Math.floor(Math.random() * 10)).join('');
 };
 
+// Maps gRPC status codes (google.rpc.Code) to HTTP status codes, following the
+// standard grpc-gateway table. Transient / server-side failures (RESOURCE_EXHAUSTED,
+// UNAVAILABLE, DEADLINE_EXCEEDED, INTERNAL) map to retryable 429/5xx rather than a
+// blanket 400, so callers — and the SDK's 429/5xx retry — don't treat a GCP hiccup as
+// a non-retryable bad request. Unknown codes default to 500 (retryable, safest).
+const GRPC_CODE_TO_HTTP_STATUS: Record<number, number> = {
+    2: 500,  // UNKNOWN
+    3: 400,  // INVALID_ARGUMENT
+    4: 504,  // DEADLINE_EXCEEDED
+    5: 404,  // NOT_FOUND
+    6: 409,  // ALREADY_EXISTS
+    7: 403,  // PERMISSION_DENIED
+    8: 429,  // RESOURCE_EXHAUSTED
+    9: 400,  // FAILED_PRECONDITION
+    10: 409, // ABORTED
+    11: 400, // OUT_OF_RANGE
+    13: 500, // INTERNAL
+    14: 503, // UNAVAILABLE
+    15: 500, // DATA_LOSS
+    16: 401, // UNAUTHENTICATED
+};
+
 @Injectable()
 export class GcpTaskSchedulerService implements IJobScheduler {
     private readonly logger = new Logger(GcpTaskSchedulerService.name);
@@ -152,6 +174,7 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         } catch (error: any) {
             if (error && error.hasOwnProperty('code') && error.hasOwnProperty('details')) {
                 const details = error.details;
+                const status = GRPC_CODE_TO_HTTP_STATUS[error.code] ?? 500;
 
                 // Diagnostics run INSIDE the catch, so a throw here would escape and turn
                 // the intended 400 into a 500. Isolate all enrichment + logging in its own
@@ -192,6 +215,7 @@ export class GcpTaskSchedulerService implements IJobScheduler {
                             url: safeUrl(url),
                             scheduleTime: scheduleTime?.toISOString() ?? 'now',
                             code: error.code,
+                            httpStatus: status,
                             details,
                             message: error.message,
                             fieldViolations,
@@ -204,9 +228,9 @@ export class GcpTaskSchedulerService implements IJobScheduler {
                 } catch {
                     // Enrichment or serialization failed — emit a minimal, primitive-only
                     // log so the failure is still recorded, then continue to the 400.
-                    this.logger.error({ queueName, code: error.code, details }, 'Error creating GCP task (diagnostics unavailable)');
+                    this.logger.error({ queueName, code: error.code, httpStatus: status, details }, 'Error creating GCP task (diagnostics unavailable)');
                 }
-                throw new HttpException(details, 400);
+                throw new HttpException(details, status);
             }
             // Errors without gRPC code/details would otherwise propagate as an opaque
             // 500 with nothing logged — surface them too, without letting logging mask them.

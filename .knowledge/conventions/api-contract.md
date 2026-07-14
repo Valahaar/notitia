@@ -52,6 +52,21 @@ Omitting `schedule` means immediate execution.
 - **200 OK** on successful cancellation, body contains `{ success: boolean }`.
 - Error responses use NestJS default `HttpException` format via `HttpExceptionFilter` (`src/common/filters/http-exception.filter.ts`).
 
+#### GCP scheduling failures preserve retryability
+
+When the GCP scheduler's `createTask` call fails, `GcpTaskSchedulerService.createTask` maps the gRPC status code (`google.rpc.Code`) to the corresponding HTTP status via `GRPC_CODE_TO_HTTP_STATUS`, rather than collapsing everything to `400`. This keeps transient/server-side failures retryable end-to-end:
+
+| gRPC code | HTTP | Retryable |
+|-----------|------|-----------|
+| INVALID_ARGUMENT (3), FAILED_PRECONDITION (9), OUT_OF_RANGE (11) | 400 | no |
+| UNAUTHENTICATED (16) / PERMISSION_DENIED (7) / NOT_FOUND (5) | 401 / 403 / 404 | no |
+| ALREADY_EXISTS (6) / ABORTED (10) | 409 | no |
+| RESOURCE_EXHAUSTED (8) | 429 | yes |
+| DEADLINE_EXCEEDED (4) / UNAVAILABLE (14) | 504 / 503 | yes |
+| INTERNAL (13) / UNKNOWN (2) / DATA_LOSS (15) / unmapped | 500 | yes |
+
+The Python SDK retries `429` and `5xx`, so mapping (not masking) is what lets a GCP rate-limit or transient blip during scheduling be retried automatically. All these failures are logged under `Error creating GCP task` with the full gRPC `statusDetails`/`fieldViolations`, the mapped `httpStatus`, and the task shape; the enrichment/logging is wrapped so it can never itself alter the response.
+
 ### Auth
 
 The service uses a moat-and-castle trust model:

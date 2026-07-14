@@ -152,12 +152,54 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         } catch (error: any) {
             if (error.hasOwnProperty('code') && error.hasOwnProperty('details')) {
                 const details = error.details;
+
+                // GCP's `details` string is generic ("Request contains an invalid
+                // argument."). The rich, field-level cause lives in the gRPC status
+                // details / metadata — capture them so the offending argument is named
+                // instead of guessed at. `statusDetails` (decoded by google-gax) carries
+                // a google.rpc.BadRequest whose `fieldViolations` point at the exact field.
+                const statusDetails = error.statusDetails;
+                const fieldViolations = Array.isArray(statusDetails)
+                    ? statusDetails.flatMap((d: any) => d?.fieldViolations ?? [])
+                    : undefined;
+                const metadata = error.metadata?.getMap?.() ?? undefined;
+
+                // Shape of the task we tried to create, so failures can be correlated
+                // against the documented createTask limits (1 MiB task size, <80KB
+                // headers, 30-day schedule horizon, 15s-30min dispatch deadline) and the
+                // trailing-whitespace-in-AUTH_TOKEN case — without logging the token.
+                const authHeader = task.httpRequest?.headers?.['Authorization'] ?? '';
+                const taskShape = {
+                    hasName: !!task.name,
+                    scheduleTimeSeconds: task.scheduleTime?.seconds ?? null,
+                    dispatchDeadlineSeconds: task.dispatchDeadline?.seconds ?? null,
+                    bodyBytes: task.httpRequest?.body ? Buffer.byteLength(task.httpRequest.body as Buffer) : 0,
+                    headerNames: Object.keys(task.httpRequest?.headers ?? {}),
+                    authHeaderLength: authHeader.length,
+                    authHeaderHasTrailingWhitespace: /\s$/.test(authHeader),
+                    authHeaderHasControlChars: /[\x00-\x1f\x7f]/.test(authHeader),
+                };
+
                 this.logger.error(
-                    { queueName, url: safeUrl(url), scheduleTime: scheduleTime?.toISOString() ?? 'now', code: error.code, details },
+                    {
+                        queueName,
+                        url: safeUrl(url),
+                        scheduleTime: scheduleTime?.toISOString() ?? 'now',
+                        code: error.code,
+                        details,
+                        message: error.message,
+                        fieldViolations,
+                        statusDetails,
+                        metadata,
+                        taskShape,
+                    },
                     'Error creating GCP task',
                 );
                 throw new HttpException(details, 400);
             }
+            // Errors without gRPC code/details would otherwise propagate as an opaque
+            // 500 with nothing logged — surface them too.
+            this.logger.error({ queueName, url: safeUrl(url), err: error }, 'Unexpected error creating GCP task');
             throw error;
         }
     }

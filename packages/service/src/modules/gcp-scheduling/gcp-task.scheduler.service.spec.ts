@@ -1,0 +1,104 @@
+import { HttpException, Logger } from '@nestjs/common';
+import { GcpTaskSchedulerService } from './gcp-task.scheduler.service';
+
+jest.mock('@google-cloud/tasks', () => ({
+    CloudTasksClient: jest.fn().mockImplementation(() => ({})),
+}));
+
+const INVALID_ARGUMENT = 3;
+const UNAVAILABLE = 14;
+
+const grpcError = (code: number, extra: Record<string, unknown> = {}) => ({
+    code,
+    details: 'Request contains an invalid argument.',
+    message: `${code} GRPC_ERROR: Request contains an invalid argument.`,
+    ...extra,
+});
+
+function makeService(createTask: jest.Mock) {
+    const config = {
+        get: (key: string) =>
+            ({
+                GCP_PROJECT_ID: 'proj',
+                GCP_LOCATION_ID: 'europe-west8',
+                GCP_JOB_QUEUE_NAME: 'jobs',
+                NOTIFICATION_SERVICE_URL: 'https://notitia.test',
+                AUTH_TOKEN: 'token',
+            })[key],
+    };
+    const service = new GcpTaskSchedulerService(config as any, {} as any, {} as any);
+    (service as any).cloudTasksClient = Promise.resolve({
+        queuePath: () => 'projects/proj/locations/europe-west8/queues/jobs',
+        createTask,
+    });
+    return service;
+}
+
+// Runs createTask to completion while fake timers drive any backoff sleeps.
+async function run(service: GcpTaskSchedulerService) {
+    const settled = service
+        .createTask('jobs', 'https://notitia.test/relay', { a: 1 })
+        .then(
+            (value) => ({ value }),
+            (error) => ({ error }),
+        );
+    await jest.runAllTimersAsync();
+    return settled;
+}
+
+describe('GcpTaskSchedulerService.createTask', () => {
+    beforeEach(() => {
+        jest.useFakeTimers();
+        jest.spyOn(Logger.prototype, 'error').mockImplementation();
+        jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    });
+
+    afterEach(() => {
+        jest.useRealTimers();
+        jest.restoreAllMocks();
+    });
+
+    it('retries a bare INVALID_ARGUMENT and returns the task id once Cloud Tasks accepts it', async () => {
+        const createTask = jest
+            .fn()
+            .mockRejectedValueOnce(grpcError(INVALID_ARGUMENT, { statusDetails: [] }))
+            .mockResolvedValueOnce([{ name: 'projects/proj/locations/l/queues/jobs/tasks/123' }]);
+
+        const result: any = await run(makeService(createTask));
+
+        expect(result.value).toBe('123');
+        expect(createTask).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not retry INVALID_ARGUMENT when Cloud Tasks names the offending field', async () => {
+        const violations = [{ fieldViolations: [{ field: 'task.http_request.url', description: 'bad' }] }];
+        const createTask = jest
+            .fn()
+            .mockRejectedValue(grpcError(INVALID_ARGUMENT, { statusDetails: violations }));
+
+        const result: any = await run(makeService(createTask));
+
+        expect(createTask).toHaveBeenCalledTimes(1);
+        expect(result.error).toBeInstanceOf(HttpException);
+        expect(result.error.getStatus()).toBe(400);
+    });
+
+    it('answers 503 (retryable by callers) once INVALID_ARGUMENT keeps failing after 3 attempts', async () => {
+        const createTask = jest.fn().mockRejectedValue(grpcError(INVALID_ARGUMENT));
+
+        const result: any = await run(makeService(createTask));
+
+        expect(createTask).toHaveBeenCalledTimes(3);
+        expect(result.error).toBeInstanceOf(HttpException);
+        expect(result.error.getStatus()).toBe(503);
+    });
+
+    it('does not retry other gRPC errors, to avoid duplicating tasks that have no name', async () => {
+        const createTask = jest.fn().mockRejectedValue(grpcError(UNAVAILABLE));
+
+        const result: any = await run(makeService(createTask));
+
+        expect(createTask).toHaveBeenCalledTimes(1);
+        expect(result.error.getStatus()).toBe(503);
+    });
+});

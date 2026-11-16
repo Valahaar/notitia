@@ -54,7 +54,7 @@ JobSchedulingController.scheduleJob(dto: ScheduleRequestDto)
 **GCP path** (`gcp-task.scheduler.service.ts`):
 1. `computeNextExecutionTime()` uses `ScheduleHelperService` to parse CRON/RRule and find next occurrence.
 2. If within 30 days → `createRelayEndpointTask()` creates a GCP task targeting `/relay` on the service itself.
-3. If beyond 30 days → `createMetaEndpointTask()` creates a meta-task targeting `/meta/:ufid`, storing UFID→GCP Task ID in Redis.
+3. If beyond 30 days → `createMetaEndpointTask()` creates a meta-task targeting `/meta/:ufid`, best-effort tracking UFID→GCP Task ID in the Keyv cache (Mongo in production). Recurring and long one-off schedules use meta-tasks named by occurrence (see `subsystems/gcp-scheduling`).
 4. Returns job ID (UFID for meta-jobs, GCP task name segment for direct relay).
 
 **In-memory path** (`in-memory.scheduler.service.ts`):

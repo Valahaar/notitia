@@ -296,6 +296,68 @@ describe('MetaService', () => {
             expect(scheduler.createMetaEndpointTask.mock.calls[0][3]).toBe(metaName('2025-11-16T11:00:00.000Z'));
         });
 
+        it('a v1.3.4 one-off hop takes T from schedule.time, not from its ETA', async () => {
+            const now = new Date('2026-11-16T10:00:00Z');
+            jest.useFakeTimers({ now });
+            const { scheduler, service } = makeService();
+            const time = '2026-12-01T09:00:00.000Z';
+
+            // v1.3.4 shape: no occurrence; the hop fired at its 30-day horizon (ETA = now).
+            await service.processMetaJob(
+                UFID,
+                { target: 'https://example.com/hook', queue: 'jobs', schedule: { type: 'on', time }, isOccurrence: false } as any,
+                { taskName: 'legacy-numeric-task', etaSeconds: now.getTime() / 1000 },
+            );
+
+            expect(scheduler.createRelayEndpointTask).not.toHaveBeenCalled();
+            expect(scheduler.createMetaEndpointTask).toHaveBeenCalledTimes(1);
+            const [, payload, at, name] = scheduler.createMetaEndpointTask.mock.calls[0];
+            expect(name).toBe(metaName(time));
+            expect(at).toEqual(new Date(time));
+            expect(payload.occurrence).toBe(time);
+            expect(payload.isOccurrence).toBe(true);
+            expect(scheduler.setIdForUfid).toHaveBeenCalledWith(UFID, metaName(time), 'jobs');
+        });
+
+        it('a v1.3.4 recurring hop takes T as the next occurrence after now, not its ETA', async () => {
+            const now = new Date('2026-11-16T10:00:00Z');
+            jest.useFakeTimers({ now });
+            const { scheduler, service } = makeService();
+            const next = '2026-12-01T09:00:00.000Z';
+
+            await service.processMetaJob(
+                UFID,
+                recurring('0 9 1 12 *', { isOccurrence: false }) as any,
+                { taskName: 'legacy-numeric-task', etaSeconds: now.getTime() / 1000 },
+            );
+
+            expect(scheduler.createRelayEndpointTask).not.toHaveBeenCalled();
+            expect(scheduler.createMetaEndpointTask).toHaveBeenCalledTimes(1);
+            const [, payload, at, name] = scheduler.createMetaEndpointTask.mock.calls[0];
+            expect(name).toBe(metaName(next));
+            expect(at).toEqual(new Date(next));
+            expect(payload.occurrence).toBe(next);
+            expect(payload.isOccurrence).toBe(true);
+            expect(scheduler.setIdForUfid).toHaveBeenCalledWith(UFID, metaName(next), 'jobs');
+        });
+
+        it('a v1.3.4 recurring hop whose rule has no next occurrence ends the chain', async () => {
+            const now = new Date('2026-11-16T10:00:00Z');
+            jest.useFakeTimers({ now });
+            const { scheduler, service } = makeService();
+
+            await service.processMetaJob(
+                UFID,
+                recurring('DTSTART:20250101T090000Z\nRRULE:FREQ=YEARLY;COUNT=1', { isOccurrence: false }) as any,
+                { taskName: 'legacy-numeric-task', etaSeconds: now.getTime() / 1000 },
+            );
+
+            expect(scheduler.createRelayEndpointTask).not.toHaveBeenCalled();
+            expect(scheduler.createMetaEndpointTask).not.toHaveBeenCalled();
+            expect(scheduler.setIdForUfid).not.toHaveBeenCalled();
+            expect(scheduler.delUfid).toHaveBeenCalledWith(UFID, 'jobs');
+        });
+
         it('a tracked-id write failure does not fail the delivery', async () => {
             jest.useFakeTimers({ now: new Date('2026-11-16T10:00:05Z') });
             const scheduler = makeScheduler();

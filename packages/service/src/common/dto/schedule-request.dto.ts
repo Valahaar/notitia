@@ -128,7 +128,7 @@ export class ScheduleRequestDto<T extends ScheduleBaseDto = ScheduleBaseDto> {
     @ApiPropertyOptional({
         type: String,
         maxLength: 256,
-        description: 'Makes the request idempotent: a retry with the same key returns the same job id instead of creating a second task. Cloud Tasks refuses a name for about an hour after its task ran or was deleted, so use a new key for each task you want.',
+        description: 'Makes the request idempotent: a retry with the same key (and queue) returns the same job id instead of creating a second task or schedule. Cloud Tasks refuses a name for about an hour after its task ran or was deleted, so use a new key for each task you want. For a recurring or long one-off schedule the key derives the schedule id, and a key whose schedule was cancelled is refused with 409, so use one key per schedule version (for example a document id plus an edit counter).',
     })
     @IsOptional()
     @IsString()

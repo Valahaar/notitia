@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject, HttpException } from '@nestjs/common';
+import { Injectable, Logger, Inject, HttpException, ConflictException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { IJobScheduler } from '../../common/interfaces/job-scheduler.interface';
 import { ScheduleRequestDto, OneTimeScheduleDto, RecurringScheduleDto, HttpMethod as AppHttpMethod, ScheduleType } from '../../common/dto/schedule-request.dto';
@@ -11,15 +11,29 @@ import { GCP_RELAY_PATH } from './gcp-task-relay.controller';
 import { safeUrl } from '../../common/utils/log.util';
 import { CloudTasksClientHolder, isBareInvalidArgument } from './cloud-tasks-client.holder';
 import { taskNameFor } from './task-name';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { NOTITIA_OCCURRENCE_HEADER } from '../../common/constants';
 
 export const GCP_MAX_SCHEDULE_SECONDS = 30 * 24 * 60 * 60;
 // const GCP_MAX_SCHEDULE_SECONDS = 30;
 
-const generateNumericId = (length: number = 19): string => {
+/** A tombstone outlives a 30-day hop plus the meta queue's retry window. */
+export const TOMBSTONE_TTL_MS = 60 * 24 * 3600 * 1000;
+
+const UFID_DIGITS = 19;
+
+const generateNumericId = (length: number = UFID_DIGITS): string => {
     return Array.from({ length }, () => Math.floor(Math.random() * 10)).join('');
 };
+
+/**
+ * The ufid of a keyed recurring or long one-off schedule: 19 decimal digits (today's ufid shape)
+ * from the SHA-256 of (`'ufid'`, queue, key), so a retried create lands on the same chain.
+ */
+export function deriveUfid(key: string, queue: string): string {
+    const digest = createHash('sha256').update(['ufid', queue, key].join('\u0000')).digest();
+    return (digest.readBigUInt64BE(0) % BigInt(10) ** BigInt(UFID_DIGITS)).toString().padStart(UFID_DIGITS, '0');
+}
 
 // Maps gRPC status codes (google.rpc.Code) to HTTP status codes, following the
 // standard grpc-gateway table. Transient / server-side failures (RESOURCE_EXHAUSTED,
@@ -100,20 +114,70 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         return `meta-${this.getQueueName(queueName)}`;
     }
 
+    /** Forgets the tracked meta task of `ufid`, under the current key and the v1.3.4 forms. */
     async delUfid(ufid: string, queueName?: string): Promise<void> {
-        await this.cacheManager.del(this.getCacheKeyForJob(ufid, queueName));
+        for (const key of [this.getCacheKeyForJob(ufid), ...this.legacyCacheKeysForJob(ufid, queueName)]) {
+            await this.cacheManager.del(key);
+        }
     }
 
+    /**
+     * The full resource name of the tracked meta task of `ufid`, or null when `ufid` is not a known
+     * schedule. Reads `gcp_job:<ufid>`, then the v1.3.4 `gcp_job:<queue>:<ufid>` forms for the
+     * request queue and the default queue (their value is a short task id in `meta-<queue>`).
+     */
     async getIdFromUfid(ufid: string, queueName?: string): Promise<string | null> {
-        return await this.cacheManager.get<string>(this.getCacheKeyForJob(ufid, queueName));
+        const tracked = await this.cacheManager.get<string>(this.getCacheKeyForJob(ufid));
+        if (tracked) {
+            return tracked;
+        }
+        for (const queue of this.legacyQueues(queueName)) {
+            const legacyId = await this.cacheManager.get<string>(this.legacyCacheKey(ufid, queue));
+            if (legacyId) {
+                return await this.getTaskPath(this.getMetaQueueName(queue), legacyId);
+            }
+        }
+        return null;
     }
 
-    async setIdForUfid(ufid: string, id: string, queueName?: string): Promise<void> {
-        await this.cacheManager.set(this.getCacheKeyForJob(ufid, queueName), id);
+    /** Tracks `taskName` (in the meta queue of `queueName`) as the current meta task of `ufid`. */
+    async setIdForUfid(ufid: string, taskName: string, queueName?: string): Promise<void> {
+        const taskPath = await this.getTaskPath(this.getMetaQueueName(queueName), taskName);
+        await this.cacheManager.set(this.getCacheKeyForJob(ufid), taskPath);
     }
 
-    private getCacheKeyForJob(jobId: string, queueName?: string): string {
-        return `gcp_job:${this.getQueueName(queueName)}:${jobId}`;
+    /** Marks `ufid` cancelled: its next meta delivery ends the chain without relaying. */
+    async tombstone(ufid: string): Promise<void> {
+        await this.cacheManager.set(this.getTombstoneKey(ufid), new Date().toISOString(), TOMBSTONE_TTL_MS);
+    }
+
+    async isTombstoned(ufid: string): Promise<boolean> {
+        return !!(await this.cacheManager.get<string>(this.getTombstoneKey(ufid)));
+    }
+
+    /** One key form, independent of queue: the queue a schedule uses lives in its meta payload. */
+    private getCacheKeyForJob(ufid: string): string {
+        return `gcp_job:${ufid}`;
+    }
+
+    private getTombstoneKey(ufid: string): string {
+        return `gcp_job:cancelled:${ufid}`;
+    }
+
+    /**
+     * The queues whose v1.3.4 `gcp_job:<queue>:<ufid>` key may hold a tracked id: the request's, then
+     * the default. A queue named `cancelled` is skipped: its old key is the tombstone's.
+     */
+    private legacyQueues(queueName?: string): string[] {
+        return [...new Set([this.getQueueName(queueName), this.getQueueName()])].filter((queue) => queue !== 'cancelled');
+    }
+
+    private legacyCacheKey(ufid: string, queue: string): string {
+        return `gcp_job:${queue}:${ufid}`;
+    }
+
+    private legacyCacheKeysForJob(ufid: string, queueName?: string): string[] {
+        return this.legacyQueues(queueName).map((queue) => this.legacyCacheKey(ufid, queue));
     }
 
     private async getQueuePath(queueName: string): Promise<string> {
@@ -391,15 +455,21 @@ export class GcpTaskSchedulerService implements IJobScheduler {
                 throw new Error(`[${safeUrl(request.target)}] Next execution time is undefined. Cannot schedule meta-job.`);
             }
 
-            // Long-term one-time job OR any recurring job: create UFID and schedule a meta-job
-            const ufid = generateNumericId();
+            // Long-term one-time job OR any recurring job: create UFID and schedule a meta-job.
+            // A caller key derives the ufid, so a retried create returns the same schedule.
+            const keyed = !!request.idempotencyKey;
+            const ufid = keyed ? deriveUfid(request.idempotencyKey!, this.getQueueName(request.queue)) : generateNumericId();
+            if (keyed && await this.isTombstoned(ufid)) {
+                this.logger.warn({ ufid }, 'keyed-schedule-cancelled: refusing a reused idempotency key');
+                throw new ConflictException('A schedule with this idempotency key was cancelled; use a new key');
+            }
             this.logger.log(
-                { ufid, recurring, scheduleTime: nextExecutionTime!.toISOString(), target: safeUrl(request.target) },
+                { ufid, keyed, recurring, scheduleTime: nextExecutionTime!.toISOString(), target: safeUrl(request.target) },
                 'Scheduling meta-job',
             );
 
-            // Named by ufid, so a retried create cannot start the chain twice. Later meta tasks are
-            // named by the occurrence they serve (MetaService).
+            // Named by ufid, so a retried create cannot start the chain twice (ALREADY_EXISTS returns
+            // the same ufid). Later meta tasks are named by the occurrence they serve (MetaService).
             const gcpMetaTaskId = await this.createMetaEndpointTask(
                 ufid,
                 { ...request, isOccurrence: nextIsOccurrence, occurrence: realNextExecutionTime?.toISOString() },
@@ -432,14 +502,30 @@ export class GcpTaskSchedulerService implements IJobScheduler {
             'Attempting to cancel job',
         );
 
-        const gcpTaskIdFromCache = await this.getIdFromUfid(jobId);
-        const qName = this.getQueueName(queueName);
-        const queue = gcpTaskIdFromCache ? this.getMetaQueueName(qName) : qName;
-        const actualJobId = gcpTaskIdFromCache || jobId;
+        // A known ufid (recurring or long one-off): the tombstone is what stops the chain; deleting
+        // the tracked meta task only saves a delivery.
+        const trackedTask = await this.getIdFromUfid(jobId, queueName);
+        if (trackedTask) {
+            await this.tombstone(jobId);
+            await this.clientHolder.call('deleteTask', (c, o) => c.deleteTask({ name: trackedTask }, o)).catch((err) => {
+                if (err?.code === 5) { // NOT_FOUND: the tracked task already ran or was replaced
+                    this.logger.log({ jobId, taskName: trackedTask }, 'cancel-tracked-meta-task-not-found');
+                    return;
+                }
+                this.logger.warn({ jobId, taskName: trackedTask, code: err?.code, error: err?.message ?? String(err) }, 'cancel-tracked-meta-task-delete-failed');
+            });
+            try {
+                await this.delUfid(jobId, queueName);
+            } catch (err: any) {
+                this.logger.warn({ jobId, error: err?.message ?? String(err) }, 'meta-tracked-id-delete-failed');
+            }
+            this.logger.log({ jobId }, 'schedule-cancelled: tombstone written');
+            return true;
+        }
 
-        const name = await this.getTaskPath(queue, actualJobId);
-
-        const successful = await this.clientHolder.call('deleteTask', (c, o) => c.deleteTask({ name }, o)).then(() => true).catch((err) => {
+        // Otherwise a direct task id.
+        const name = await this.getTaskPath(this.getQueueName(queueName), jobId);
+        return await this.clientHolder.call('deleteTask', (c, o) => c.deleteTask({ name }, o)).then(() => true).catch((err) => {
             if (err.code === 5) { // NOT_FOUND error code from GCP
                 this.logger.warn(
                     { jobId, taskName: name },
@@ -449,15 +535,5 @@ export class GcpTaskSchedulerService implements IJobScheduler {
             }
             throw err;
         });
-
-        if (gcpTaskIdFromCache) {
-            await this.delUfid(jobId);
-            this.logger.log(
-                { jobId },
-                'Cleared UFID from cache as its tracked task was successfully cancelled',
-            );
-        }
-
-        return successful;
     }
 }

@@ -20,6 +20,7 @@ const deliveryOf = (t: string) => ({ taskName: metaName(t), etaSeconds: Math.flo
 function makeScheduler() {
     return {
         getQueueName: jest.fn().mockReturnValue('jobs'),
+        isTombstoned: jest.fn().mockResolvedValue(false),
         getIdFromUfid: jest.fn().mockResolvedValue('tracked-task'),
         setIdForUfid: jest.fn().mockResolvedValue(undefined),
         delUfid: jest.fn().mockResolvedValue(undefined),
@@ -31,6 +32,61 @@ function makeScheduler() {
 
 function makeService(scheduler = makeScheduler()) {
     return { scheduler, service: new MetaService(scheduler as any, new ScheduleHelperService()) };
+}
+
+/**
+ * A real scheduler and MetaService over a fake Cloud Tasks (a known name answers ALREADY_EXISTS)
+ * and a Map-backed cache. `onCreate` runs before each create, so a test can act mid-delivery.
+ */
+function makeWorld(defaultQueue = 'jobs') {
+    const existing = new Set<string>();
+    const hooks: { onCreate?: (taskPath: string) => Promise<void> } = {};
+    const createTask = jest.fn().mockImplementation(async ({ task }: any) => {
+        await hooks.onCreate?.(task.name);
+        if (existing.has(task.name)) {
+            throw { code: 6, details: 'Requested entity already exists' };
+        }
+        existing.add(task.name);
+        return [{ name: task.name }];
+    });
+    const deleteTask = jest.fn().mockResolvedValue([{}]);
+    const store = new Map<string, unknown>();
+    const cache = {
+        get: jest.fn(async (key: string) => (store.has(key) ? store.get(key) : null)),
+        set: jest.fn(async (key: string, value: unknown) => {
+            store.set(key, value);
+        }),
+        del: jest.fn(async (key: string) => {
+            store.delete(key);
+        }),
+    };
+    const config = {
+        get: (key: string) =>
+            ({
+                GCP_PROJECT_ID: 'proj',
+                GCP_LOCATION_ID: 'europe-west8',
+                GCP_JOB_QUEUE_NAME: defaultQueue,
+                NOTIFICATION_SERVICE_URL: 'https://notitia.test',
+                AUTH_TOKEN: 'token',
+            })[key],
+    };
+    const scheduler = new GcpTaskSchedulerService(config as any, new ScheduleHelperService(), cache as any);
+    (scheduler as any).clientHolder = new CloudTasksClientHolder(() => ({
+        queuePath: (_p: string, _l: string, q: string) => `projects/proj/locations/l/queues/${q}`,
+        taskPath: (_p: string, _l: string, q: string, t: string) => `projects/proj/locations/l/queues/${q}/tasks/${t}`,
+        createTask,
+        deleteTask,
+        close: jest.fn(),
+    }) as any);
+    const service = new MetaService(scheduler, new ScheduleHelperService());
+
+    const created = () =>
+        createTask.mock.calls.map(([{ task }]: any) => ({
+            queue: task.name.split('/')[5] as string,
+            name: task.name.split('/').at(-1) as string,
+            body: JSON.parse(Buffer.from(task.httpRequest.body).toString()),
+        }));
+    return { scheduler, service, createTask, deleteTask, store, hooks, created };
 }
 
 const recurring = (schedule: string, extra: Record<string, unknown> = {}) => ({
@@ -134,36 +190,8 @@ describe('MetaService', () => {
         });
 
         it('a replayed delivery creates the same names', async () => {
-            // Real scheduler over a fake Cloud Tasks that refuses a known name with ALREADY_EXISTS.
-            const existing = new Set<string>();
-            const createTask = jest.fn().mockImplementation(async ({ task }: any) => {
-                const short = task.name.split('/').at(-1);
-                if (existing.has(short)) {
-                    throw { code: 6, details: 'Requested entity already exists' };
-                }
-                existing.add(short);
-                return [{ name: task.name }];
-            });
-            const config = {
-                get: (key: string) =>
-                    ({
-                        GCP_PROJECT_ID: 'proj',
-                        GCP_LOCATION_ID: 'europe-west8',
-                        GCP_JOB_QUEUE_NAME: 'jobs',
-                        NOTIFICATION_SERVICE_URL: 'https://notitia.test',
-                        AUTH_TOKEN: 'token',
-                    })[key],
-            };
-            const cache = { get: jest.fn(), set: jest.fn(), del: jest.fn() };
-            const scheduler = new GcpTaskSchedulerService(config as any, new ScheduleHelperService(), cache as any);
-            (scheduler as any).clientHolder = new CloudTasksClientHolder(() => ({
-                queuePath: (_p: string, _l: string, q: string) => `projects/proj/locations/l/queues/${q}`,
-                taskPath: (_p: string, _l: string, q: string, t: string) => `projects/proj/locations/l/queues/${q}/tasks/${t}`,
-                createTask,
-                close: jest.fn(),
-            }) as any);
-            const service = new MetaService(scheduler, new ScheduleHelperService());
-            const T = '2026-11-16T10:00:00.000Z';
+            const { service, createTask } = makeWorld();
+            const T ='2026-11-16T10:00:00.000Z';
             const payload = recurring('0 * * * *', { occurrence: T }) as any;
 
             jest.useFakeTimers({ now: new Date('2026-11-16T10:00:05Z') });
@@ -173,7 +201,8 @@ describe('MetaService', () => {
 
             const names = createTask.mock.calls.map(([{ task }]: any) => task.name.split('/').at(-1));
             expect(names).toEqual([relayName(T), metaName('2026-11-16T11:00:00.000Z'), relayName(T), metaName('2026-11-16T11:00:00.000Z')]);
-            expect(existing.size).toBe(2);
+            await expect(createTask.mock.results[2].value).rejects.toMatchObject({ code: 6 });
+            await expect(createTask.mock.results[3].value).rejects.toMatchObject({ code: 6 });
         });
 
         it('a late retry converges on the next shared occurrence', async () => {
@@ -385,6 +414,109 @@ describe('MetaService', () => {
                 service.processMetaJob(UFID, recurring('0 * * * *', { occurrence: T }) as any, deliveryOf(T)),
             ).rejects.toThrow('unavailable');
             expect(scheduler.createMetaEndpointTask).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('cancel by tombstone', () => {
+        it('a tombstoned schedule relays nothing, schedules nothing and clears the tracked id', async () => {
+            jest.useFakeTimers({ now: new Date('2026-11-16T10:00:05Z') });
+            const scheduler = makeScheduler();
+            scheduler.isTombstoned.mockResolvedValue(true);
+            const { service } = makeService(scheduler);
+            const T = '2026-11-16T10:00:00.000Z';
+
+            await service.processMetaJob(UFID, recurring('0 * * * *', { occurrence: T }) as any, deliveryOf(T));
+
+            expect(scheduler.isTombstoned).toHaveBeenCalledWith(UFID);
+            expect(scheduler.createRelayEndpointTask).not.toHaveBeenCalled();
+            expect(scheduler.createMetaEndpointTask).not.toHaveBeenCalled();
+            expect(scheduler.setIdForUfid).not.toHaveBeenCalled();
+            expect(scheduler.delUfid).toHaveBeenCalledWith(UFID, 'jobs');
+        });
+
+        it('a failed tombstone lookup does not stop the chain', async () => {
+            jest.useFakeTimers({ now: new Date('2026-11-16T10:00:05Z') });
+            const scheduler = makeScheduler();
+            scheduler.isTombstoned.mockRejectedValue(new Error('mongo down'));
+            const { service } = makeService(scheduler);
+            const T = '2026-11-16T10:00:00.000Z';
+
+            await service.processMetaJob(UFID, recurring('0 * * * *', { occurrence: T }) as any, deliveryOf(T));
+
+            expect(scheduler.createRelayEndpointTask).toHaveBeenCalledTimes(1);
+            expect(scheduler.createMetaEndpointTask).toHaveBeenCalledTimes(1);
+        });
+
+        it('cancel without queue stops a jobs-queue schedule', async () => {
+            jest.useFakeTimers({ now: new Date('2026-11-16T09:30:00Z') });
+            // The service default queue differs from the schedule's, so a queue-keyed lookup would miss.
+            const { scheduler, service, deleteTask, store, created } = makeWorld('default');
+
+            const ufid = await scheduler.scheduleJob({
+                target: 'https://example.com/hook',
+                queue: 'jobs',
+                schedule: { type: 'recurring', schedule: '0 * * * *' },
+            } as any);
+            const [initial] = created();
+            expect(initial.queue).toBe('meta-jobs');
+
+            await expect(scheduler.cancelJob(ufid)).resolves.toBe(true);
+            expect(store.has(`gcp_job:cancelled:${ufid}`)).toBe(true);
+            expect(deleteTask.mock.calls[0][0]).toEqual({
+                name: `projects/proj/locations/l/queues/meta-jobs/tasks/${taskNameFor([ufid, 'create'])}`,
+            });
+
+            // The first occurrence's delivery still arrives (the eager delete raced it).
+            const T = initial.body.occurrence;
+            expect(T).toBe('2026-11-16T10:00:00.000Z');
+            jest.setSystemTime(new Date('2026-11-16T10:00:03Z'));
+            await service.processMetaJob(ufid, initial.body, {
+                taskName: initial.name,
+                etaSeconds: new Date(T).getTime() / 1000,
+            });
+
+            expect(created()).toHaveLength(1);
+            expect(store.has(`gcp_job:${ufid}`)).toBe(false);
+        });
+
+        it('a cancel during a delivery stops the next occurrence', async () => {
+            jest.useFakeTimers({ now: new Date('2026-11-16T09:30:00Z') });
+            const { scheduler, service, hooks, store, created } = makeWorld();
+
+            const ufid = await scheduler.scheduleJob({
+                target: 'https://example.com/hook',
+                queue: 'jobs',
+                schedule: { type: 'recurring', schedule: '0 * * * *' },
+            } as any);
+            const [initial] = created();
+            const T = '2026-11-16T10:00:00.000Z';
+
+            // The cancel lands while the delivery for T is relaying.
+            let cancelled = false;
+            hooks.onCreate = async (taskPath) => {
+                if (!cancelled && taskPath.includes('/queues/jobs/')) {
+                    cancelled = true;
+                    await scheduler.cancelJob(ufid);
+                }
+            };
+
+            jest.setSystemTime(new Date('2026-11-16T10:00:03Z'));
+            await service.processMetaJob(ufid, initial.body, { taskName: initial.name, etaSeconds: new Date(T).getTime() / 1000 });
+
+            // That delivery's relay goes out, and it still creates the meta task for S.
+            const afterFirst = created();
+            const relays = afterFirst.filter((t) => t.queue === 'jobs');
+            expect(relays.map((t) => t.name)).toEqual([taskNameFor([ufid, 'relay', T])]);
+            const S = '2026-11-16T11:00:00.000Z';
+            const next = afterFirst.at(-1)!;
+            expect(next.name).toBe(taskNameFor([ufid, 'meta', S]));
+
+            // The delivery for S finds the tombstone: no relay, no further meta.
+            jest.setSystemTime(new Date('2026-11-16T11:00:02Z'));
+            await service.processMetaJob(ufid, next.body, { taskName: next.name, etaSeconds: new Date(S).getTime() / 1000 });
+
+            expect(created()).toHaveLength(afterFirst.length);
+            expect(store.has(`gcp_job:${ufid}`)).toBe(false);
         });
     });
 });

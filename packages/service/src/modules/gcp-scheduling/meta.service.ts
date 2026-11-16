@@ -89,9 +89,18 @@ export class MetaService {
         await this.track(ufid, next, queue);
     }
 
-    /** Replaced by the real tombstone lookup (cancel by tombstone). Until then nothing is tombstoned. */
-    protected async isTombstoned(_ufid: string): Promise<boolean> {
-        return false;
+    /**
+     * Whether the schedule was cancelled. A failed lookup counts as not cancelled: a cancel then takes
+     * effect at the next delivery whose lookup succeeds, whereas failing the delivery could exhaust
+     * the meta queue's retries and silently end a live schedule.
+     */
+    private async isTombstoned(ufid: string): Promise<boolean> {
+        try {
+            return await this.gcpTaskScheduler.isTombstoned(ufid);
+        } catch (error: any) {
+            this.logger.warn({ ufid, error: error?.message ?? String(error) }, 'meta-tombstone-lookup-failed');
+            return false;
+        }
     }
 
     /**

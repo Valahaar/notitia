@@ -9,6 +9,7 @@ import { Cache } from 'cache-manager';
 import { GcpTaskRelayPayloadDto } from './dto/gcp-task-relay-payload.dto';
 import { GCP_RELAY_PATH } from './gcp-task-relay.controller';
 import { safeUrl } from '../../common/utils/log.util';
+import { CloudTasksClientHolder, isBareInvalidArgument } from './cloud-tasks-client.holder';
 
 const GCP_MAX_SCHEDULE_SECONDS = 30 * 24 * 60 * 60;
 // const GCP_MAX_SCHEDULE_SECONDS = 30;
@@ -39,32 +40,12 @@ const GRPC_CODE_TO_HTTP_STATUS: Record<number, number> = {
     16: 401, // UNAUTHENTICATED
 };
 
-// Cloud Tasks occasionally rejects a valid createTask call with a bare INVALID_ARGUMENT
-// ("Request contains an invalid argument.") and no google.rpc.BadRequest field violations;
-// the identical request succeeds moments later. A genuinely malformed task names the
-// offending field, so only the bare form is retried. Tasks are created without a name, so
-// retrying a rejected create cannot produce a duplicate.
-const INVALID_ARGUMENT_CODE = 3;
-const INVALID_ARGUMENT_MAX_ATTEMPTS = 3;
-const INVALID_ARGUMENT_RETRY_BASE_MS = 150;
-
-const isBareInvalidArgument = (error: any): boolean => {
-    if (error?.code !== INVALID_ARGUMENT_CODE) return false;
-    const violations = Array.isArray(error.statusDetails)
-        ? error.statusDetails.flatMap((d: any) => d?.fieldViolations ?? [])
-        : [];
-    return violations.length === 0;
-};
-
 @Injectable()
 export class GcpTaskSchedulerService implements IJobScheduler {
     private readonly logger = new Logger(GcpTaskSchedulerService.name);
-    // Held as a promise so the constructor returns immediately. Building a
-    // CloudTasksClient synchronously loads gRPC + proto descriptors, which is
-    // ~100s of ms; deferring it keeps that off the Nest bootstrap chain.
-    // Callers go through getClient() and await on first use — by which point
-    // the promise has typically already resolved.
-    private cloudTasksClient: Promise<CloudTasksClient>;
+    // Owns the CloudTasksClient (lazy build, keepalive, per-attempt deadline, rebuild + retry
+    // on dead channels, bare INVALID_ARGUMENT retry). See cloud-tasks-client.holder.ts.
+    private clientHolder: CloudTasksClientHolder;
     private gcpProject: string;
     private gcpLocation: string;
     private gcpJobQueue: string; // For tasks targeting /relay
@@ -101,14 +82,11 @@ export class GcpTaskSchedulerService implements IJobScheduler {
             this.serviceUrl += '/';
         }
 
-        this.cloudTasksClient = Promise.resolve().then(() => new CloudTasksClient());
-        this.cloudTasksClient.catch((err) => {
-            this.logger.error({ err }, 'Failed to initialize CloudTasksClient');
-        });
+        this.clientHolder = new CloudTasksClientHolder();
     }
 
     private getClient(): Promise<CloudTasksClient> {
-        return this.cloudTasksClient;
+        return this.clientHolder.get();
     }
 
     getQueueName(queueName?: string): string {
@@ -185,27 +163,15 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         }
 
         try {
-            const [client, parent] = await Promise.all([this.getClient(), this.getQueuePath(queueName)]);
-            for (let attempt = 1; ; attempt++) {
-                try {
-                    const [response] = await client.createTask({ parent, task });
-                    return response.name?.split('/').at(-1)!;
-                } catch (error: any) {
-                    if (!isBareInvalidArgument(error) || attempt >= INVALID_ARGUMENT_MAX_ATTEMPTS) {
-                        throw error;
-                    }
-                    const delayMs = Math.round(INVALID_ARGUMENT_RETRY_BASE_MS * 2 ** (attempt - 1) * (0.5 + Math.random()));
-                    this.logger.warn(
-                        { queueName, attempt, maxAttempts: INVALID_ARGUMENT_MAX_ATTEMPTS, delayMs, code: error.code, details: error.details },
-                        'Retrying GCP task creation after INVALID_ARGUMENT without field violations',
-                    );
-                    await new Promise((resolve) => setTimeout(resolve, delayMs));
-                }
-            }
+            const parent = await this.getQueuePath(queueName);
+            // Tasks are created without a name, so retrying a failed create inside the holder
+            // can at worst leave an orphan duplicate, never a name collision.
+            const [response] = await this.clientHolder.call('createTask', (c, o) => c.createTask({ parent, task }, o));
+            return response.name?.split('/').at(-1)!;
         } catch (error: any) {
             if (error && error.hasOwnProperty('code') && error.hasOwnProperty('details')) {
                 const details = error.details;
-                // Reaching here with a bare INVALID_ARGUMENT means the retries above were exhausted.
+                // Reaching here with a bare INVALID_ARGUMENT means the holder's retries were exhausted.
                 const status = isBareInvalidArgument(error) ? 503 : (GRPC_CODE_TO_HTTP_STATUS[error.code] ?? 500);
 
                 // Diagnostics run INSIDE the catch, so a throw here would escape and turn
@@ -432,9 +398,9 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         const queue = gcpTaskIdFromCache ? this.getMetaQueueName(qName) : qName;
         const actualJobId = gcpTaskIdFromCache || jobId;
 
-        const [client, name] = await Promise.all([this.getClient(), this.getTaskPath(queue, actualJobId)]);
+        const name = await this.getTaskPath(queue, actualJobId);
 
-        const successful = await client.deleteTask({ name }).then(() => true).catch((err) => {
+        const successful = await this.clientHolder.call('deleteTask', (c, o) => c.deleteTask({ name }, o)).then(() => true).catch((err) => {
             if (err.code === 5) { // NOT_FOUND error code from GCP
                 this.logger.warn(
                     { jobId, taskName: name },

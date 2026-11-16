@@ -1,5 +1,6 @@
 import { HttpException, Logger } from '@nestjs/common';
 import { GcpTaskSchedulerService } from './gcp-task.scheduler.service';
+import { CloudTasksClientHolder } from './cloud-tasks-client.holder';
 
 jest.mock('@google-cloud/tasks', () => ({
     CloudTasksClient: jest.fn().mockImplementation(() => ({})),
@@ -27,10 +28,12 @@ function makeService(createTask: jest.Mock) {
             })[key],
     };
     const service = new GcpTaskSchedulerService(config as any, {} as any, {} as any);
-    (service as any).cloudTasksClient = Promise.resolve({
+    const fakeClient = {
         queuePath: () => 'projects/proj/locations/europe-west8/queues/jobs',
         createTask,
-    });
+        close: jest.fn(),
+    };
+    (service as any).clientHolder = new CloudTasksClientHolder(() => fakeClient as any);
     return service;
 }
 
@@ -93,12 +96,12 @@ describe('GcpTaskSchedulerService.createTask', () => {
         expect(result.error.getStatus()).toBe(503);
     });
 
-    it('does not retry other gRPC errors, to avoid duplicating tasks that have no name', async () => {
+    it('retries UNAVAILABLE and answers 503 once the budget is spent', async () => {
         const createTask = jest.fn().mockRejectedValue(grpcError(UNAVAILABLE));
 
         const result: any = await run(makeService(createTask));
 
-        expect(createTask).toHaveBeenCalledTimes(1);
+        expect(createTask.mock.calls.length).toBeGreaterThan(1);
         expect(result.error.getStatus()).toBe(503);
     });
 });

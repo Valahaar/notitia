@@ -14,7 +14,7 @@ import { taskNameFor } from './task-name';
 import { randomUUID } from 'crypto';
 import { NOTITIA_OCCURRENCE_HEADER } from '../../common/constants';
 
-const GCP_MAX_SCHEDULE_SECONDS = 30 * 24 * 60 * 60;
+export const GCP_MAX_SCHEDULE_SECONDS = 30 * 24 * 60 * 60;
 // const GCP_MAX_SCHEDULE_SECONDS = 30;
 
 const generateNumericId = (length: number = 19): string => {
@@ -398,7 +398,14 @@ export class GcpTaskSchedulerService implements IJobScheduler {
                 'Scheduling meta-job',
             );
 
-            const gcpMetaTaskId = await this.createMetaEndpointTask(ufid, { ...request, isOccurrence: nextIsOccurrence, occurrence: realNextExecutionTime?.toISOString() }, nextExecutionTime!);
+            // Named by ufid, so a retried create cannot start the chain twice. Later meta tasks are
+            // named by the occurrence they serve (MetaService).
+            const gcpMetaTaskId = await this.createMetaEndpointTask(
+                ufid,
+                { ...request, isOccurrence: nextIsOccurrence, occurrence: realNextExecutionTime?.toISOString() },
+                nextExecutionTime!,
+                taskNameFor([ufid, 'create']),
+            );
             if (!gcpMetaTaskId) {
                 throw new Error(`[${ufid}] Failed to schedule meta-job task for ${safeUrl(request.target)}`);
             }

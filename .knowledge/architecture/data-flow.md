@@ -65,7 +65,7 @@ JobSchedulingController.scheduleJob(dto: ScheduleRequestDto)
 ### Phase 4: Target Execution
 
 Both paths ultimately call `HttpExecutorService.executeHttpRequest()` (`src/common/services/http-executor.service.ts`), which:
-1. Injects `X-Notitia-Task-ID` header with the job ID.
+1. Injects `X-Notitia-Task-ID` header with the job ID, and `X-Notitia-Occurrence` (ISO-8601 UTC) with the scheduled time of the occurrence for scheduled requests (not immediate ones).
 2. Sends the HTTP request via axios to the target URL with the configured method, payload, headers, and params.
 3. Logs request duration and any errors.
 

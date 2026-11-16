@@ -218,11 +218,12 @@ describe('GcpTaskSchedulerService occurrence', () => {
         const createTask = jest.fn().mockImplementation(async ({ task }: any) => [{ name: task.name }]);
         const service = makeRealHelperService(createTask);
 
-        await service.scheduleJob({
+        const ufid = await service.scheduleJob({
             target: 'https://example.com/hook',
             schedule: { type: 'recurring', schedule: 'RRULE:FREQ=HOURLY;INTERVAL=6', timezone: 'Europe/Rome' },
         } as any);
 
+        expect(createTask.mock.calls[0][0].task.name.split('/').at(-1)).toBe(taskNameFor([ufid, 'create']));
         const body = bodyOf(createTask);
         expect(body.schedule.schedule).toBe('DTSTART;TZID=Europe/Rome:20261116T110230\nRRULE:FREQ=HOURLY;INTERVAL=6');
         expect(body.schedule.timezone).toBe('Europe/Rome');

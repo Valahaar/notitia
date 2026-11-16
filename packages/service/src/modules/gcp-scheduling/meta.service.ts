@@ -2,6 +2,7 @@ import { Injectable, Logger, Inject, InternalServerErrorException } from '@nestj
 import { ScheduleRequestDto } from '../../common/dto/schedule-request.dto';
 import { GcpTaskSchedulerService } from './gcp-task.scheduler.service';
 import { safeUrl } from '../../common/utils/log.util';
+import { NOTITIA_TASK_ID_HEADER } from '../../common/constants';
 
 
 @Injectable()
@@ -41,7 +42,7 @@ export class MetaService {
                     ...executionPayload,
                     headers: {
                         ...(executionPayload.headers || {}),
-                        'X-Notitia-Task-ID': ufid,
+                        [NOTITIA_TASK_ID_HEADER]: ufid,
                     },
                 };
                 await this.gcpTaskScheduler.createRelayEndpointTask(
@@ -86,7 +87,7 @@ export class MetaService {
                 ...originalRequest,
                 headers: {
                     ...(originalRequest.headers || {}),
-                    'X-Notitia-Task-ID': ufid,
+                    [NOTITIA_TASK_ID_HEADER]: ufid,
                 },
             };
             const newTaskId = await this.gcpTaskScheduler.createRelayEndpointTask(

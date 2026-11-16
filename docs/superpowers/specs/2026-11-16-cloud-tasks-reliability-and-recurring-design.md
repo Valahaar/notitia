@@ -286,17 +286,18 @@ Where: `packages/core/src/spectral/utils/notitia.py`, a new branch off `main`.
   Watchdog and park-backstop arms (`_watchdog_via_notitia`, and `_schedule_park_backstop`'s arm) keep today's
   short budget: they already retry `BACKSTOP_ARM_ATTEMPTS` times and then raise, which fails the invocation and lets
   Cloud Tasks redeliver it; multiplying that by a 10-minute inner budget would block one `execute` for about 30 min.
-  Because the SDK's `RetryConfig` is per client, `notitia.py` holds two `LowLevelClient`s (dispatch, arms) instead of
-  one; no SDK change.
-- The dispatch client retries 429/5xx for **[call]** about 10 minutes (for example `max_attempts` around 12,
-  `max_delay` 60 s), instead of today's 5 attempts in about 85 s.
+  The SDK client and its default `RetryConfig` stay as they are (one client); the long budget is an outer loop in
+  `_defer_via_notitia` around the SDK call, active only inside a job invocation (below). No SDK change.
+- Inside a job invocation, a dispatch keeps retrying 429/5xx/network failures (each round being the SDK's own 5
+  attempts) with backoff capped at 60 s until **[call]** 600 s after the invocation started, instead of giving up
+  after one round of about 85 s.
 - `_defer_via_notitia` also retries network errors (`httpx.TransportError`, timeouts) inside the same budget; the
   SDK does not (see the 2026-05-11 SDK spec, "out of scope"). Without a task name a retried timeout can create a
   duplicate task; for `execute` that is harmless (the job lock), which is why this is acceptable on `main` before N1.
 - The budget is per invocation, not per call **[call]**: `_trigger_dependents` dispatches dependents one after
-  another, so N stranded dispatches must not cost N × 10 minutes. Once one dispatch has exhausted the budget, later
-  dispatches in the same process fail fast for a short cool-down (or the budget is tracked per request through a
-  context variable; builder's choice). Bound: everything stays well under the 1800 s limits that apply here
+  another, so N stranded dispatches must not cost N × 10 minutes. The invocation's deadline lives in a context
+  variable set by the two routes; once it has passed, later dispatches in the same request get one ordinary round.
+  Bound: everything stays well under the 1800 s limits that apply here
   (backend Cloud Run `timeout = 1800s`; Notitia `DEFAULT_TIMEOUT_SECONDS = 1800`, the dispatch deadline of every
   `execute` and `/watchdog` relay).
 - Request paths keep a short budget **[owner]**: only dispatches made inside a job invocation (the

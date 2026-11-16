@@ -73,7 +73,7 @@ For recurring jobs, after execution the scheduler computes the next occurrence a
 
 ## Failure Modes
 
-- **SDK**: Non-202 responses raise `NotitiaError` with status, message, and response data. No automatic retries.
+- **SDK**: Non-202 responses raise `NotitiaError` with status, message, and response data, after the SDK retries `429`/`5xx` (and network errors when the request carries an `idempotency_key`).
 - **GCP relay/meta**: GCP Cloud Tasks handles retries per queue config. The service does not retry task execution; its only retry is on task *creation*, where `CloudTasksClientHolder` rebuilds the client and retries on `DEADLINE_EXCEEDED`/`UNAVAILABLE` and retries a bare `INVALID_ARGUMENT` (see `subsystems/gcp-scheduling`).
 - **In-memory**: Errors in `executeJob()` are caught and logged but not retried.
 - **Schedule exhaustion**: When a recurring schedule has no more occurrences, `ScheduleHelperService` returns `null` and the job quietly stops.

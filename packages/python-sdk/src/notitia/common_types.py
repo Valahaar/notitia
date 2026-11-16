@@ -3,6 +3,12 @@ from enum import Enum
 from typing import Optional, Dict, Any, Union
 
 
+# Headers the service sends on every delivered task. Consumers dedupe on the
+# pair (task id, occurrence).
+NOTITIA_TASK_ID_HEADER = "X-Notitia-Task-ID"
+NOTITIA_OCCURRENCE_HEADER = "X-Notitia-Occurrence"
+
+
 class ScheduleType(str, Enum):
     ON = "on"
     RECURRING = "recurring"
@@ -30,6 +36,9 @@ class OneTimeSchedule(ScheduleBase):
 @dataclass
 class RecurringSchedule(ScheduleBase):
     schedule: str  # CRON string or RRule string
+    # IANA time zone the schedule is evaluated in (e.g. "Europe/Rome").
+    # None → the service default (UTC).
+    timezone: Optional[str] = None
     type: ScheduleType = field(default=ScheduleType.RECURRING, init=False)
 
 

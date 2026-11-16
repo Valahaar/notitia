@@ -5,6 +5,7 @@ import { ScheduleHelperService } from '../../common/services/schedule.helper.ser
 import { HttpExecutorService } from '../../common/services/http-executor.service';
 import { v4 as uuidv4 } from 'uuid';
 import { safeUrl } from '../../common/utils/log.util';
+import { NOTITIA_OCCURRENCE_HEADER, NOTITIA_TASK_ID_HEADER } from '../../common/constants';
 
 interface InMemoryJob {
     timeoutId?: NodeJS.Timeout;
@@ -60,19 +61,32 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         if (delay <= 0) {
             this.executeJob(jobId, request);
         } else {
+            const occurrence = targetTime;
             this.logger.log(
                 { jobId, scheduledFor: targetTime.toISOString(), target: safeUrl(request.target) },
                 'Job scheduled',
             );
             const timeoutId = setTimeout(() => {
-                this.executeJob(jobId, request);
+                this.executeJob(jobId, request, occurrence);
                 this.jobs.delete(jobId);
             }, delay);
             this.jobs.set(jobId, { timeoutId, originalRequest: request, isRecurring: false });
         }
     }
 
-    private handleRecurringSchedule(jobId: string, request: ScheduleRequestDto<RecurringScheduleDto>): void {
+    private handleRecurringSchedule(jobId: string, requestIn: ScheduleRequestDto<RecurringScheduleDto>): void {
+        // Anchor an RRULE without DTSTART once, at creation.
+        const request: ScheduleRequestDto<RecurringScheduleDto> = {
+            ...requestIn,
+            schedule: {
+                ...requestIn.schedule!,
+                schedule: this.scheduleHelperService.normalizeRecurringSchedule(
+                    requestIn.schedule!.schedule,
+                    requestIn.schedule!.timezone,
+                    new Date(),
+                ),
+            },
+        };
         this.jobs.set(jobId, {
             originalRequest: request,
             isRecurring: true
@@ -86,7 +100,9 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         const now = new Date();
 
         try {
-            nextOccurrence = this.scheduleHelperService.calculateNextOccurrence(originalRecurringRequest.schedule!.schedule, now);
+            nextOccurrence = this.scheduleHelperService.calculateNextOccurrence(originalRecurringRequest.schedule!.schedule, now, {
+                timezone: originalRecurringRequest.schedule!.timezone,
+            });
         } catch (err) {
             this.logger.error(
                 { jobId, scheduleString: originalRecurringRequest.schedule!.schedule, target: safeUrl(originalRecurringRequest.target), error: String(err) },
@@ -108,7 +124,7 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
                     { jobId },
                     'Next occurrence is in the past, finding next future occurrence',
                 );
-                const futureOccurrence = this.findNextFutureOccurrence(originalRecurringRequest.schedule!.schedule, now);
+                const futureOccurrence = this.findNextFutureOccurrence(originalRecurringRequest.schedule!.schedule, now, originalRecurringRequest.schedule!.timezone);
                 if (futureOccurrence) {
                     this.scheduleNextRecurringInstanceWithDate(jobId, originalRecurringRequest, futureOccurrence);
                 } else {
@@ -122,7 +138,7 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
             }
 
             const timeoutId = setTimeout(() => {
-                this.executeJob(jobId + '-' + new Date().getTime(), originalRecurringRequest);
+                this.executeJob(jobId, originalRecurringRequest, nextOccurrence!);
                 this.scheduleNextRecurringInstance(jobId, originalRecurringRequest);
             }, delay);
 
@@ -145,9 +161,9 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         }
     }
 
-    private findNextFutureOccurrence(scheduleString: string, fromDate: Date): Date | null {
+    private findNextFutureOccurrence(scheduleString: string, fromDate: Date, timezone?: string): Date | null {
         try {
-            return this.scheduleHelperService.calculateNextOccurrence(scheduleString, fromDate, false);
+            return this.scheduleHelperService.calculateNextOccurrence(scheduleString, fromDate, { timezone });
         } catch (err) {
             this.logger.error(
                 { scheduleString, error: String(err) },
@@ -176,7 +192,7 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         );
 
         const timeoutId = setTimeout(() => {
-            this.executeJob(jobId + '-' + new Date().getTime(), originalRecurringRequest);
+            this.executeJob(jobId, originalRecurringRequest, nextOccurrence);
             this.scheduleNextRecurringInstance(jobId, originalRecurringRequest);
         }, delay);
 
@@ -192,16 +208,21 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         }
     }
 
-    private async executeJob(jobId: string, request: ScheduleRequestDto, attempt = 1): Promise<void> {
+    private async executeJob(jobId: string, request: ScheduleRequestDto, occurrence?: Date, attempt = 1): Promise<void> {
         const maxRetries = 3;
 
         try {
+            // Same headers a GCP relay sends: the schedule's id, plus the occurrence time when there is one.
+            const headers: Record<string, string> = { ...(request.headers || {}), [NOTITIA_TASK_ID_HEADER]: jobId };
+            if (occurrence) {
+                headers[NOTITIA_OCCURRENCE_HEADER] = occurrence.toISOString();
+            }
             const result = await this.httpExecutor.executeHttpRequest({
                 taskId: jobId,
                 target: request.target,
                 method: request.method,
                 payload: request.payload,
-                headers: request.headers,
+                headers,
                 params: request.params,
                 timeoutSeconds: request.timeout,
             });
@@ -212,7 +233,7 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
                 { jobId, status: result.status, delayMs: delay, attempt, maxRetries },
                 'Execution failed, retrying',
             );
-                setTimeout(() => this.executeJob(jobId, request, attempt + 1), delay);
+                setTimeout(() => this.executeJob(jobId, request, occurrence, attempt + 1), delay);
             }
         } catch (error) {
             if (attempt < maxRetries) {
@@ -221,7 +242,7 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
                     { jobId, delayMs: delay, attempt, maxRetries },
                     'Execution threw error, retrying',
                 );
-                setTimeout(() => this.executeJob(jobId, request, attempt + 1), delay);
+                setTimeout(() => this.executeJob(jobId, request, occurrence, attempt + 1), delay);
             } else {
                 this.logger.error(
                     { jobId, maxRetries },

@@ -1,5 +1,5 @@
 import { ScheduleRequestDto } from '../../../common/dto/schedule-request.dto';
-import { IsObject, IsNotEmpty, IsBoolean } from 'class-validator';
+import { IsObject, IsNotEmpty, IsBoolean, IsString, IsOptional } from 'class-validator';
 
 export class GcpMetaTaskPayloadDto extends ScheduleRequestDto {
 
@@ -14,4 +14,15 @@ export class GcpMetaTaskPayloadDto extends ScheduleRequestDto {
     @IsNotEmpty()
     isOccurrence: boolean;
 
+    /** ISO-8601 UTC time of the occurrence this task serves. `isOccurrence` stays for old readers. */
+    @IsString()
+    @IsOptional()
+    occurrence?: string;
+
 }
+
+/**
+ * What a meta task actually carries: the original request plus the occurrence it serves.
+ * Payloads written by v1.3.4 have no `occurrence`.
+ */
+export type GcpMetaTaskPayload = ScheduleRequestDto & { isOccurrence?: boolean; occurrence?: string };

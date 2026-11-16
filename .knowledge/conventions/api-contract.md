@@ -15,7 +15,7 @@ Ensure consistent communication between the Python SDK and the NestJS service, a
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
 | `POST` | `/schedule` | Bearer token | Schedule a new job (immediate, one-time, or recurring) |
-| `DELETE` | `/schedule/:id` | Bearer token | Cancel a scheduled job by ID (query param `queue` required for GCP) |
+| `DELETE` | `/schedule/:id` | Bearer token | Cancel a scheduled job by ID. A schedule id (ufid, 19 digits) is cancelled with or without the `queue` query param; a direct task id is deleted from `queue` (default queue when absent), so a direct task in a non-default queue still needs `queue` |
 | `POST` | `/relay` | Bearer token | Internal: GCP Cloud Tasks calls this to trigger actual HTTP execution |
 | `POST` | `/meta/:ufid` | Bearer token | Internal: GCP meta-task callback to re-evaluate and re-schedule long-term jobs |
 
@@ -37,13 +37,22 @@ Ensure consistent communication between the Python SDK and the NestJS service, a
   idempotencyKey?: string; // Max 256 chars. A retry with the same key (and queue) returns
                            // the same job id instead of creating a second task. Cloud Tasks
                            // refuses a name for ~1h after its task ran or was deleted, so
-                           // use a new key per task you want.
+                           // use a new key per task you want. On a recurring or long
+                           // one-off schedule the key derives the schedule id (ufid); a key
+                           // whose schedule was cancelled answers 409, so use one key per
+                           // schedule version (e.g. document id + edit counter).
   schedule?: {
     type: "ON",            // One-time
     time: string           // ISO 8601 datetime (UTC assumed)
   } | {
     type: "RECURRING",
-    pattern: string        // CRON expression or "RRULE:..." string
+    pattern: string,       // CRON expression or "RRULE:..." string
+    timezone?: string      // IANA region name or "UTC" (validated, e.g. "Europe/Rome";
+                           // offsets like "+02:00" and abbreviations like "CET" get 400); default UTC.
+                           // Cron is evaluated in this zone (local time kept across DST).
+                           // An RRULE without DTSTART is anchored once at creation as
+                           // DTSTART;TZID=<timezone>:<now local>. A DTSTART;TZID that
+                           // differs from `timezone` is rejected with 400.
   }
 }
 ```
@@ -53,7 +62,8 @@ Omitting `schedule` means immediate execution.
 ### Response Conventions
 
 - **202 Accepted** on successful scheduling, body contains `{ jobId: string }`.
-- **200 OK** on successful cancellation, body contains `{ success: boolean }`.
+- **409 Conflict** on `POST /schedule` when a recurring or long one-off request's `idempotencyKey` belongs to a cancelled (tombstoned) schedule: "A schedule with this idempotency key was cancelled; use a new key". Not retryable; the caller needs a new key.
+- **200 OK** on successful cancellation, body contains `{ success: boolean }`. Cancelling a 19-digit id always answers `true`, including a repeat cancel: it is tombstoned as a schedule (its next meta delivery ends the chain without relaying) and, when no tracked meta task is found, also deleted as a v1.3.4 direct task if one exists. Any other id is a direct task id and answers `false` when Cloud Tasks has no such task.
 - Error responses use NestJS default `HttpException` format via `HttpExceptionFilter` (`src/common/filters/http-exception.filter.ts`).
 
 #### GCP scheduling failures preserve retryability

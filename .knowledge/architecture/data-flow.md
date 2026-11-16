@@ -54,7 +54,7 @@ JobSchedulingController.scheduleJob(dto: ScheduleRequestDto)
 **GCP path** (`gcp-task.scheduler.service.ts`):
 1. `computeNextExecutionTime()` uses `ScheduleHelperService` to parse CRON/RRule and find next occurrence.
 2. If within 30 days → `createRelayEndpointTask()` creates a GCP task targeting `/relay` on the service itself.
-3. If beyond 30 days → `createMetaEndpointTask()` creates a meta-task targeting `/meta/:ufid`, storing UFID→GCP Task ID in Redis.
+3. If beyond 30 days → `createMetaEndpointTask()` creates a meta-task targeting `/meta/:ufid`, best-effort tracking UFID→GCP Task ID in the Keyv cache (Mongo in production). Recurring and long one-off schedules use meta-tasks named by occurrence (see `subsystems/gcp-scheduling`).
 4. Returns job ID (UFID for meta-jobs, GCP task name segment for direct relay).
 
 **In-memory path** (`in-memory.scheduler.service.ts`):
@@ -65,7 +65,7 @@ JobSchedulingController.scheduleJob(dto: ScheduleRequestDto)
 ### Phase 4: Target Execution
 
 Both paths ultimately call `HttpExecutorService.executeHttpRequest()` (`src/common/services/http-executor.service.ts`), which:
-1. Injects `X-Notitia-Task-ID` header with the job ID.
+1. Injects `X-Notitia-Task-ID` header with the job ID, and `X-Notitia-Occurrence` (ISO-8601 UTC) with the scheduled time of the occurrence for scheduled requests (not immediate ones).
 2. Sends the HTTP request via axios to the target URL with the configured method, payload, headers, and params.
 3. Logs request duration and any errors.
 

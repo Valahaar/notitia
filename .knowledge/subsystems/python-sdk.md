@@ -17,7 +17,7 @@ Provides Python applications with a typed, async interface to schedule notificat
 - **`EventConfig[PA]`** (`src/notitia/types.py`) — Per-event configuration: a `prepare` callable, default `target` URL, and default `method`.
 - **`PreparedEventData`** (`src/notitia/types.py`) — Output of `prepare()`: payload, headers, params, schedule, and optional method/target/queue overrides.
 - **`ScheduleRequest`** (`src/notitia/common_types.py`) — Low-level DTO matching the service's `ScheduleRequestDto`. Includes `timeout: Optional[int]` (seconds, 15–1800) — the SDK field is snake_case but matches the service's camelCase `timeout` on the wire since both happen to be a single word. Maps to the Cloud Tasks dispatch deadline on the GCP scheduler.
-- **`Schedule`** (`src/notitia/common_types.py`) — Union of `OneTimeSchedule` (ISO 8601 time) and `RecurringSchedule` (CRON/RRule pattern), discriminated by `ScheduleType`.
+- **`Schedule`** (`src/notitia/common_types.py`) — Union of `OneTimeSchedule` (ISO 8601 time) and `RecurringSchedule` (CRON/RRule pattern), discriminated by `ScheduleType`. `RecurringSchedule.timezone` (optional IANA name, omitted from the wire when None) is evaluated by the service; `NOTITIA_TASK_ID_HEADER` / `NOTITIA_OCCURRENCE_HEADER` are exported from `notitia` so consumers dedupe on (task id, occurrence). Idempotency keys are per schedule version (a cancelled key gets 409; build from schedule doc id + edit counter).
 
 ## Invariants
 

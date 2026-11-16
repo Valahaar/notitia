@@ -247,7 +247,7 @@ except NotitiaError as e:
     print(e.cause)          # Underlying exception (if any)
 ```
 
-429 and 5xx responses are automatically retried before `NotitiaError` is raised. The retry policy is configurable via `RetryConfig` (see **Configuration** above).
+429 and 5xx responses are automatically retried before `NotitiaError` is raised. The retry policy is configurable via `RetryConfig` (see **Configuration** above). Network errors (connection failures, timeouts) are not retried by default, since resending a schedule request could create a duplicate. Pass `idempotency_key` (on `ScheduleRequest`, `PreparedEventData`, or `send()`) to make a request safe to retry: the service derives a deterministic task name from the key so repeats cannot duplicate, and the SDK then also retries network errors with the same backoff.
 
 ## Further Reading
 

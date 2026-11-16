@@ -25,7 +25,7 @@ Provides Python applications with a typed, async interface to schedule notificat
 - `LowLevelClient` expects 202 for schedule success and 200 for cancel success; anything else raises `NotitiaError`.
 - Enum fields are manually converted to `.value` strings during serialization (`dataclasses.asdict()` doesn't handle this).
 - `None` values are stripped from the serialized dict at both top-level and nested schedule level.
-- `LowLevelClient` retries 429 and 5xx responses by default (5 attempts, exponential backoff with equal jitter). On 429, honors `Retry-After`, `RateLimit-Reset`, `X-RateLimit-Reset` headers (max wins, capped at 60s). Network errors are NOT retried. Retry-exhaustion surfaces as the existing `NotitiaError`.
+- `LowLevelClient` retries 429 and 5xx responses by default (5 attempts, exponential backoff with equal jitter). On 429, honors `Retry-After`, `RateLimit-Reset`, `X-RateLimit-Reset` headers (max wins, capped at 60s). Network errors (`httpx.TransportError`) are NOT retried by default, because a blind retry of a non-idempotent schedule request could duplicate it. The exception: when `ScheduleRequest.idempotency_key` is set (wire field `idempotencyKey`, renamed after `asdict`; also on `PreparedEventData` and `send()`), `send_schedule_request` calls `_send_with_retries(..., retry_transport_errors=True)`, which retries transport errors with exponential backoff up to `max_attempts` and re-raises the last one. This is safe because the service names the Cloud Task from the key. Retry-exhaustion surfaces as the existing `NotitiaError`.
 
 ## External Dependencies
 

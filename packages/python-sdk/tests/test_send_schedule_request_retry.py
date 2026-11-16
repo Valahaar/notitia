@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 
 import httpx
@@ -159,4 +160,76 @@ async def test_connect_error_raises_immediately():
             await client.send_schedule_request(_request())
 
     sleep.assert_not_called()
+    await client.close()
+
+
+def _keyed_request() -> ScheduleRequest:
+    req = _request()
+    req.idempotency_key = "k"
+    return req
+
+
+@respx.mock
+async def test_idempotency_key_is_sent_camel_case():
+    route = respx.post("http://service/schedule").mock(
+        return_value=httpx.Response(202, json={"jobId": "j"})
+    )
+    client = _client()
+
+    await client.send_schedule_request(_keyed_request())
+
+    body = json.loads(route.calls.last.request.content)
+    assert body["idempotencyKey"] == "k"
+    assert "idempotency_key" not in body
+    await client.close()
+
+
+@respx.mock
+async def test_keyed_request_retries_transport_errors():
+    route = respx.post("http://service/schedule").mock(
+        side_effect=[
+            httpx.ConnectError("boom"),
+            httpx.Response(202, json={"jobId": "j"}),
+        ]
+    )
+    client = _client()
+
+    with patch("asyncio.sleep"):
+        job_id = await client.send_schedule_request(_keyed_request())
+
+    assert job_id == "j"
+    assert route.call_count == 2
+    await client.close()
+
+
+@respx.mock
+async def test_unkeyed_request_does_not_retry_transport_errors():
+    route = respx.post("http://service/schedule").mock(
+        side_effect=[
+            httpx.ConnectError("boom"),
+            httpx.Response(202, json={"jobId": "j"}),
+        ]
+    )
+    client = _client()
+
+    with patch("asyncio.sleep"):
+        with pytest.raises(NotitiaError):
+            await client.send_schedule_request(_request())
+
+    assert route.call_count == 1
+    await client.close()
+
+
+@respx.mock
+async def test_keyed_transport_retries_stop_at_max_attempts():
+    route = respx.post("http://service/schedule").mock(
+        side_effect=httpx.ReadTimeout("slow")
+    )
+    client = _client(RetryConfig(max_attempts=3, jitter="none", base_delay=0.1))
+
+    with patch("asyncio.sleep"):
+        with pytest.raises(NotitiaError):
+            await client.send_schedule_request(_keyed_request())
+
+    assert route.call_count == 3
     await client.close()

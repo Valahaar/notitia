@@ -51,3 +51,7 @@ class ScheduleRequest:
     # using the GCP scheduler. GCP accepts 15–1800 (30 min). None → server
     # default (DEFAULT_TIMEOUT_SECONDS), else Cloud Tasks' 600s default.
     timeout: Optional[int] = None
+    # Caller-supplied idempotency key, sent as `idempotencyKey`. The service
+    # derives a deterministic Cloud Task name from it, so retries cannot
+    # create duplicates. When set, the SDK also retries network errors.
+    idempotency_key: Optional[str] = None

@@ -35,12 +35,17 @@ class NotitiaClient(Generic[EventNameT]):
         headers: Any = None,
         params: Any = None,
         timeout: Optional[int] = None,
+        idempotency_key: Optional[str] = None,
     ) -> str:
         """
         Sends a request to the specified endpoint with the given method, payload, headers, and params.
 
         `timeout` is the max duration in seconds the target HTTP call may run
         (15–1800). Maps to the Cloud Tasks dispatch deadline on the GCP scheduler.
+
+        `idempotency_key` makes the request safe to retry: the service names the
+        Cloud Task deterministically from it, and the SDK additionally retries
+        network errors when it is set.
         """
 
         try:
@@ -54,6 +59,7 @@ class NotitiaClient(Generic[EventNameT]):
                 params=params,
                 schedule=schedule,
                 timeout=timeout,
+                idempotency_key=idempotency_key,
             )
         except NotitiaError:  # Re-raise SDK errors directly
             raise
@@ -119,6 +125,7 @@ class NotitiaClient(Generic[EventNameT]):
             headers=prepared_data.headers,
             params=prepared_data.params,
             timeout=prepared_data.timeout,
+            idempotency_key=prepared_data.idempotency_key,
         )
 
     async def cancel(self, job_id: str, queue: Optional[str] = None) -> bool:

@@ -72,7 +72,19 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         }
     }
 
-    private handleRecurringSchedule(jobId: string, request: ScheduleRequestDto<RecurringScheduleDto>): void {
+    private handleRecurringSchedule(jobId: string, requestIn: ScheduleRequestDto<RecurringScheduleDto>): void {
+        // Anchor an RRULE without DTSTART once, at creation.
+        const request: ScheduleRequestDto<RecurringScheduleDto> = {
+            ...requestIn,
+            schedule: {
+                ...requestIn.schedule!,
+                schedule: this.scheduleHelperService.normalizeRecurringSchedule(
+                    requestIn.schedule!.schedule,
+                    requestIn.schedule!.timezone,
+                    new Date(),
+                ),
+            },
+        };
         this.jobs.set(jobId, {
             originalRequest: request,
             isRecurring: true
@@ -86,7 +98,9 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         const now = new Date();
 
         try {
-            nextOccurrence = this.scheduleHelperService.calculateNextOccurrence(originalRecurringRequest.schedule!.schedule, now);
+            nextOccurrence = this.scheduleHelperService.calculateNextOccurrence(originalRecurringRequest.schedule!.schedule, now, {
+                timezone: originalRecurringRequest.schedule!.timezone,
+            });
         } catch (err) {
             this.logger.error(
                 { jobId, scheduleString: originalRecurringRequest.schedule!.schedule, target: safeUrl(originalRecurringRequest.target), error: String(err) },
@@ -108,7 +122,7 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
                     { jobId },
                     'Next occurrence is in the past, finding next future occurrence',
                 );
-                const futureOccurrence = this.findNextFutureOccurrence(originalRecurringRequest.schedule!.schedule, now);
+                const futureOccurrence = this.findNextFutureOccurrence(originalRecurringRequest.schedule!.schedule, now, originalRecurringRequest.schedule!.timezone);
                 if (futureOccurrence) {
                     this.scheduleNextRecurringInstanceWithDate(jobId, originalRecurringRequest, futureOccurrence);
                 } else {
@@ -145,9 +159,9 @@ export class InMemorySchedulerService implements IJobScheduler, OnModuleDestroy 
         }
     }
 
-    private findNextFutureOccurrence(scheduleString: string, fromDate: Date): Date | null {
+    private findNextFutureOccurrence(scheduleString: string, fromDate: Date, timezone?: string): Date | null {
         try {
-            return this.scheduleHelperService.calculateNextOccurrence(scheduleString, fromDate, false);
+            return this.scheduleHelperService.calculateNextOccurrence(scheduleString, fromDate, { timezone });
         } catch (err) {
             this.logger.error(
                 { scheduleString, error: String(err) },

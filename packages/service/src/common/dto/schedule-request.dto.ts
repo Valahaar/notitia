@@ -13,6 +13,7 @@ import {
     MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { IsIanaTimeZone } from './is-iana-time-zone.validator';
 
 export enum ScheduleType {
     ON = 'on',
@@ -46,6 +47,15 @@ export class RecurringScheduleDto extends ScheduleBaseDto {
     @ApiProperty({ type: String, description: 'CRON string or RRule string for recurring events.' })
     @IsString()
     schedule: string;
+
+    @ApiPropertyOptional({
+        type: String,
+        example: 'Europe/Rome',
+        description: 'IANA time zone the schedule is evaluated in (default UTC). An RRULE without DTSTART is anchored at creation time in this zone.',
+    })
+    @IsOptional()
+    @IsIanaTimeZone()
+    timezone?: string;
 
     @ApiProperty({ enum: [ScheduleType.RECURRING], default: ScheduleType.RECURRING })
     type: ScheduleType.RECURRING = ScheduleType.RECURRING;

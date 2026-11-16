@@ -47,6 +47,14 @@ export class MetaService {
             return;
         }
 
+        // v1.3.4 payloads (no `occurrence`) keep v1.3.4's stale rule: a v1.3.4 cancel deleted the
+        // tracked id but wrote no tombstone, so an untracked ufid is a cancelled chain. Drop this
+        // one release after N2, once no v1.3.4 meta task can still be pending.
+        if (!payload.occurrence && !(await this.gcpTaskScheduler.getIdFromUfid(ufid, queue))) {
+            this.logger.log({ ufid, deliveringTask: delivery.taskName }, 'meta-chain-stale: v1.3.4 payload without a tracked id');
+            return;
+        }
+
         const T = this.occurrenceOf(payload, delivery, now);
         if (!T) {
             this.logger.log({ ufid }, 'meta-chain-ended: rule has no further occurrence');
@@ -77,7 +85,7 @@ export class MetaService {
         this.logger.log({ ufid, occurrence, gcpTaskId: relayTaskName }, 'Relayed occurrence');
 
         // 4. The successor, unless the rule has ended (one-offs have none).
-        const successor = this.successorOf(payload, T, now);
+        const successor = this.successorOf(ufid, payload, T, now);
         if (!successor) {
             this.logger.log({ ufid, occurrence }, 'meta-chain-ended: rule has no further occurrence');
             await this.bestEffort(() => this.gcpTaskScheduler.delUfid(ufid, queue), { ufid }, 'meta-tracked-id-delete-failed');
@@ -147,14 +155,22 @@ export class MetaService {
         return delivery.taskName === taskNameFor([ufid, 'meta', T.toISOString()]);
     }
 
-    /** `S = after(T)`; if that is already past (a late delivery), skip ahead to `after(now)`. */
-    private successorOf(payload: GcpMetaTaskPayload, T: Date, now: Date): Date | null {
+    /**
+     * `S = after(T)`; if that is already past (a late delivery), skip ahead to `after(now)`. A rule
+     * evaluation that answers `S <= T` would re-create T's own meta task (ALREADY_EXISTS) and
+     * silently end the chain, so it also falls back to `after(now)`.
+     */
+    private successorOf(ufid: string, payload: GcpMetaTaskPayload, T: Date, now: Date): Date | null {
         if (payload.schedule?.type !== ScheduleType.RECURRING) {
             return null;
         }
         const recurring = payload.schedule as RecurringScheduleDto;
         const options = { timezone: recurring.timezone };
         const afterT = this.scheduleHelper.calculateNextOccurrence(recurring.schedule, T, options);
+        if (afterT && afterT.getTime() <= T.getTime()) {
+            this.logger.warn({ ufid, occurrence: T.toISOString(), successor: afterT.toISOString() }, 'meta-successor-not-after-occurrence');
+            return this.scheduleHelper.calculateNextOccurrence(recurring.schedule, now, options);
+        }
         if (afterT && afterT.getTime() < now.getTime()) {
             return this.scheduleHelper.calculateNextOccurrence(recurring.schedule, now, options);
         }

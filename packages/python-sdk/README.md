@@ -229,7 +229,9 @@ See the [EventsBus guide](docs/events-bus.md) for the full API including the `re
 | Immediate | Omit `schedule` | Executes ASAP |
 | One-time | `OneTimeSchedule(time="2025-12-25T10:00:00Z")` | Executes at specified UTC time |
 | Recurring (CRON) | `RecurringSchedule(schedule="0 0 * * *")` | Repeats on CRON schedule |
-| Recurring (RRULE) | `RecurringSchedule(schedule="RRULE:FREQ=DAILY;BYHOUR=9")` | Repeats on RRULE schedule |
+| Recurring (RRULE) | `RecurringSchedule(schedule="RRULE:FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0")` | Repeats on RRULE schedule |
+
+An RRULE without `DTSTART` takes its unset fields from the creation time, so pin `BYMINUTE`/`BYSECOND` (or give a `DTSTART`); `BYHOUR=9` alone fires at 09:mm:ss, the minute and second you created it.
 
 ## Recurring schedules
 

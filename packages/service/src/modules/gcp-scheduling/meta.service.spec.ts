@@ -226,7 +226,7 @@ describe('MetaService', () => {
             expect(metaCalls[1][2]).toEqual(metaCalls[0][2]);
         });
 
-        it('does not stop when the tracked id is missing', async () => {
+        it('a payload with occurrence relays without ever looking up the tracked id', async () => {
             jest.useFakeTimers({ now: new Date('2026-11-16T10:00:05Z') });
             const scheduler = makeScheduler();
             scheduler.getIdFromUfid.mockResolvedValue(null);
@@ -235,8 +235,77 @@ describe('MetaService', () => {
 
             await service.processMetaJob(UFID, recurring('0 * * * *', { occurrence: T }) as any, deliveryOf(T));
 
+            expect(scheduler.getIdFromUfid).not.toHaveBeenCalled();
             expect(scheduler.createRelayEndpointTask).toHaveBeenCalledTimes(1);
             expect(scheduler.createMetaEndpointTask).toHaveBeenCalledTimes(1);
+        });
+
+        it('a v1.3.4 payload whose ufid has no tracked id ends the chain (v1.3.4 stale rule)', async () => {
+            jest.useFakeTimers({ now: new Date('2025-11-16T10:00:03Z') });
+            const scheduler = makeScheduler();
+            scheduler.getIdFromUfid.mockResolvedValue(null);
+            const { service } = makeService(scheduler);
+
+            await service.processMetaJob(UFID, recurring('0 * * * *') as any, { taskName: 'legacy-numeric-task', etaSeconds: 1763287200 });
+
+            expect(scheduler.getIdFromUfid).toHaveBeenCalledWith(UFID, 'jobs');
+            expect(scheduler.createRelayEndpointTask).not.toHaveBeenCalled();
+            expect(scheduler.createMetaEndpointTask).not.toHaveBeenCalled();
+            expect(scheduler.setIdForUfid).not.toHaveBeenCalled();
+        });
+
+        it('a v1.3.4 payload whose ufid is tracked proceeds', async () => {
+            jest.useFakeTimers({ now: new Date('2025-11-16T10:00:03Z') });
+            const { scheduler, service } = makeService();
+
+            await service.processMetaJob(UFID, recurring('0 * * * *') as any, { taskName: 'legacy-numeric-task', etaSeconds: 1763287200 });
+
+            expect(scheduler.getIdFromUfid).toHaveBeenCalledWith(UFID, 'jobs');
+            expect(scheduler.createRelayEndpointTask).toHaveBeenCalledTimes(1);
+            expect(scheduler.createMetaEndpointTask).toHaveBeenCalledTimes(1);
+        });
+
+        it('a successor not after its occurrence is recomputed from now', async () => {
+            const T = '2026-11-16T10:00:00.000Z';
+            jest.useFakeTimers({ now: new Date('2026-11-16T10:00:05Z') });
+            const scheduler = makeScheduler();
+            // A rule evaluation that answers T itself for after(T).
+            const helper = {
+                calculateNextOccurrence: jest.fn((_schedule: string, from: Date) =>
+                    from.getTime() === new Date(T).getTime() ? new Date(T) : new Date('2026-11-16T11:00:00Z'),
+                ),
+            };
+            const service = new MetaService(scheduler as any, helper as any);
+            const warn = jest.spyOn(Logger.prototype, 'warn');
+
+            await service.processMetaJob(UFID, recurring('0 * * * *', { occurrence: T }) as any, deliveryOf(T));
+
+            expect(scheduler.createMetaEndpointTask.mock.calls[0][3]).toBe(metaName('2026-11-16T11:00:00.000Z'));
+            expect(warn).toHaveBeenCalledWith(expect.objectContaining({ ufid: UFID, occurrence: T }), 'meta-successor-not-after-occurrence');
+        });
+
+        it('the schedule time zone reaches the successor, across a DST change', async () => {
+            const { scheduler, service } = makeService();
+            const payloadFor = (occurrence: string) =>
+                ({
+                    target: 'https://example.com/hook',
+                    queue: 'jobs',
+                    schedule: { type: 'recurring', schedule: '0 21 * * *', timezone: 'Europe/Rome' },
+                    isOccurrence: true,
+                    occurrence,
+                }) as any;
+
+            // 21:00 CEST on Saturday; Rome leaves DST early on Sunday 2026-10-25.
+            const T = '2026-10-24T19:00:00.000Z';
+            jest.useFakeTimers({ now: new Date('2026-10-24T19:00:03Z') });
+            await service.processMetaJob(UFID, payloadFor(T), deliveryOf(T));
+            const S1 = '2026-10-25T20:00:00.000Z'; // 21:00 CET
+            expect(scheduler.createMetaEndpointTask.mock.calls[0][3]).toBe(metaName(S1));
+            expect(scheduler.createMetaEndpointTask.mock.calls[0][2]).toEqual(new Date(S1));
+
+            jest.setSystemTime(new Date('2026-10-25T20:00:03Z'));
+            await service.processMetaJob(UFID, payloadFor(S1), deliveryOf(S1));
+            expect(scheduler.createMetaEndpointTask.mock.calls[1][3]).toBe(metaName('2026-10-26T20:00:00.000Z'));
         });
 
         it('ends the chain when the rule has no more occurrences', async () => {

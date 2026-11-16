@@ -1,3 +1,4 @@
+import './tz'; // must stay first: pins process.env.TZ to UTC before anything uses Date
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';

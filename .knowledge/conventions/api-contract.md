@@ -47,7 +47,8 @@ Ensure consistent communication between the Python SDK and the NestJS service, a
   } | {
     type: "RECURRING",
     pattern: string,       // CRON expression or "RRULE:..." string
-    timezone?: string      // IANA zone (validated, e.g. "Europe/Rome"); default UTC.
+    timezone?: string      // IANA region name or "UTC" (validated, e.g. "Europe/Rome";
+                           // offsets like "+02:00" and abbreviations like "CET" get 400); default UTC.
                            // Cron is evaluated in this zone (local time kept across DST).
                            // An RRULE without DTSTART is anchored once at creation as
                            // DTSTART;TZID=<timezone>:<now local>. A DTSTART;TZID that

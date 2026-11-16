@@ -1,6 +1,7 @@
 import { HttpException, Logger } from '@nestjs/common';
 import { GcpTaskSchedulerService } from './gcp-task.scheduler.service';
 import { CloudTasksClientHolder } from './cloud-tasks-client.holder';
+import { taskNameFor } from './task-name';
 
 jest.mock('@google-cloud/tasks', () => ({
     CloudTasksClient: jest.fn().mockImplementation(() => ({})),
@@ -30,6 +31,7 @@ function makeService(createTask: jest.Mock) {
     const service = new GcpTaskSchedulerService(config as any, {} as any, {} as any);
     const fakeClient = {
         queuePath: () => 'projects/proj/locations/europe-west8/queues/jobs',
+        taskPath: (p: string, l: string, q: string, t: string) => `projects/${p}/locations/${l}/queues/${q}/tasks/${t}`,
         createTask,
         close: jest.fn(),
     };
@@ -40,7 +42,7 @@ function makeService(createTask: jest.Mock) {
 // Runs createTask to completion while fake timers drive any backoff sleeps.
 async function run(service: GcpTaskSchedulerService) {
     const settled = service
-        .createTask('jobs', 'https://notitia.test/relay', { a: 1 })
+        .createTask('jobs', 'https://notitia.test/relay', { a: 1 }, undefined, 'tname')
         .then(
             (value) => ({ value }),
             (error) => ({ error }),
@@ -54,6 +56,7 @@ describe('GcpTaskSchedulerService.createTask', () => {
         jest.useFakeTimers();
         jest.spyOn(Logger.prototype, 'error').mockImplementation();
         jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+        jest.spyOn(Logger.prototype, 'log').mockImplementation();
     });
 
     afterEach(() => {
@@ -103,5 +106,61 @@ describe('GcpTaskSchedulerService.createTask', () => {
 
         expect(createTask.mock.calls.length).toBeGreaterThan(1);
         expect(result.error.getStatus()).toBe(503);
+    });
+
+    it('names every task', async () => {
+        const createTask = jest.fn().mockResolvedValue([{ name: 'projects/proj/locations/l/queues/jobs/tasks/tname' }]);
+        const result: any = await run(makeService(createTask));
+
+        expect(result.value).toBe('tname');
+        expect(createTask.mock.calls[0][0].task.name).toMatch(/\/tasks\/tname$/);
+    });
+
+    it('treats ALREADY_EXISTS as success and returns the name', async () => {
+        const createTask = jest.fn().mockRejectedValue({ code: 6, details: 'exists' });
+        const result: any = await run(makeService(createTask));
+
+        expect(result.error).toBeUndefined();
+        expect(result.value).toBe('tname');
+    });
+});
+
+describe('GcpTaskSchedulerService.scheduleJob naming', () => {
+    beforeEach(() => {
+        jest.spyOn(Logger.prototype, 'error').mockImplementation();
+        jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+        jest.spyOn(Logger.prototype, 'log').mockImplementation();
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    it('returns the same id when the keyed task already exists', async () => {
+        const createTask = jest
+            .fn()
+            .mockImplementationOnce(async ({ task }: any) => [{ name: task.name }])
+            .mockRejectedValueOnce({ code: 6, details: 'exists' });
+        const service = makeService(createTask);
+
+        const req = { target: 'https://example.com/hook', idempotencyKey: 'k', queue: 'jobs' } as any;
+        const first = await service.scheduleJob(req);
+        const second = await service.scheduleJob(req);
+
+        const expected = taskNameFor(['key', 'jobs', 'k']);
+        expect(first).toBe(expected);
+        expect(second).toBe(expected);
+    });
+
+    it('uses a fresh random name per request without a key', async () => {
+        const createTask = jest.fn().mockImplementation(async ({ task }: any) => [{ name: task.name }]);
+        const service = makeService(createTask);
+
+        const req = { target: 'https://example.com/hook', queue: 'jobs' } as any;
+        const a = await service.scheduleJob(req);
+        const b = await service.scheduleJob(req);
+
+        expect(a).not.toBe(b);
+        expect(a).toMatch(/^[0-9a-f]{40}$/);
     });
 });

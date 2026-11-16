@@ -34,6 +34,10 @@ Ensure consistent communication between the Python SDK and the NestJS service, a
                            // Maps to Cloud Tasks dispatch deadline on GCP scheduler.
                            // Falls back to DEFAULT_TIMEOUT_SECONDS env var, else
                            // Cloud Tasks' 600s default.
+  idempotencyKey?: string; // Max 256 chars. A retry with the same key (and queue) returns
+                           // the same job id instead of creating a second task. Cloud Tasks
+                           // refuses a name for ~1h after its task ran or was deleted, so
+                           // use a new key per task you want.
   schedule?: {
     type: "ON",            // One-time
     time: string           // ISO 8601 datetime (UTC assumed)

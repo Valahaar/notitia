@@ -10,6 +10,7 @@ import {
     IsInt,
     Min,
     Max,
+    MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -113,4 +114,14 @@ export class ScheduleRequestDto<T extends ScheduleBaseDto = ScheduleBaseDto> {
     @Min(15)
     @Max(1800)
     timeout?: number;
+
+    @ApiPropertyOptional({
+        type: String,
+        maxLength: 256,
+        description: 'Makes the request idempotent: a retry with the same key returns the same job id instead of creating a second task. Cloud Tasks refuses a name for about an hour after its task ran or was deleted, so use a new key for each task you want.',
+    })
+    @IsOptional()
+    @IsString()
+    @MaxLength(256)
+    idempotencyKey?: string;
 }

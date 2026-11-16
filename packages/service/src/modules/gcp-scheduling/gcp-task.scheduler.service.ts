@@ -10,6 +10,8 @@ import { GcpTaskRelayPayloadDto } from './dto/gcp-task-relay-payload.dto';
 import { GCP_RELAY_PATH } from './gcp-task-relay.controller';
 import { safeUrl } from '../../common/utils/log.util';
 import { CloudTasksClientHolder, isBareInvalidArgument } from './cloud-tasks-client.holder';
+import { taskNameFor } from './task-name';
+import { randomUUID } from 'crypto';
 
 const GCP_MAX_SCHEDULE_SECONDS = 30 * 24 * 60 * 60;
 // const GCP_MAX_SCHEDULE_SECONDS = 30;
@@ -126,7 +128,7 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         return client.taskPath(this.gcpProject, this.gcpLocation, queueName, taskName);
     }
 
-    public async createTask(queueName: string, url: string, payload: any, scheduleTime?: Date, taskName?: string, timeoutSeconds?: number): Promise<string> {
+    public async createTask(queueName: string, url: string, payload: any, scheduleTime: Date | undefined, taskName: string, timeoutSeconds?: number): Promise<string> {
         const body = Buffer.from(JSON.stringify(payload));
 
         // Get the authentication token from environment
@@ -145,11 +147,8 @@ export class GcpTaskSchedulerService implements IJobScheduler {
                 },
                 body: body,
             },
+            name: await this.getTaskPath(queueName, taskName),
         };
-
-        if (taskName) {
-            task.name = await this.getTaskPath(queueName, taskName);
-        }
 
         if (scheduleTime) {
             task.scheduleTime = {
@@ -164,11 +163,15 @@ export class GcpTaskSchedulerService implements IJobScheduler {
 
         try {
             const parent = await this.getQueuePath(queueName);
-            // Tasks are created without a name, so retrying a failed create inside the holder
-            // can at worst leave an orphan duplicate, never a name collision.
+            // Every task is named, so a create that was retried (or whose response was lost)
+            // answers ALREADY_EXISTS, which is success: the task is there.
             const [response] = await this.clientHolder.call('createTask', (c, o) => c.createTask({ parent, task }, o));
             return response.name?.split('/').at(-1)!;
         } catch (error: any) {
+            if (error?.code === 6) {
+                this.logger.log({ queueName, taskName }, 'cloud-tasks-task-already-exists');
+                return taskName;
+            }
             if (error && error.hasOwnProperty('code') && error.hasOwnProperty('details')) {
                 const details = error.details;
                 // Reaching here with a bare INVALID_ARGUMENT means the holder's retries were exhausted.
@@ -250,6 +253,7 @@ export class GcpTaskSchedulerService implements IJobScheduler {
     public async createRelayEndpointTask(
         originalRequest: ScheduleRequestDto,
         scheduleTime?: Date, // If undefined, task is scheduled for ASAP.
+        taskName?: string,
     ): Promise<string | undefined> {
         const effectiveTimeout = originalRequest.timeout ?? this.defaultTimeout;
 
@@ -267,7 +271,7 @@ export class GcpTaskSchedulerService implements IJobScheduler {
             `${this.serviceUrl}${GCP_RELAY_PATH}`,
             relayPayload,
             scheduleTime,
-            undefined,
+            taskName ?? taskNameFor(['req', randomUUID()]),
             effectiveTimeout,
         );
     }
@@ -282,6 +286,7 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         ufid: string,
         originalRequest: ScheduleRequestDto & { isOccurrence?: boolean },
         scheduleTime: Date,
+        taskName?: string,
     ): Promise<string | undefined> {
 
         return await this.createTask(
@@ -289,6 +294,7 @@ export class GcpTaskSchedulerService implements IJobScheduler {
             `${this.serviceUrl}meta/${ufid}`,
             originalRequest,
             scheduleTime,
+            taskName ?? taskNameFor(['req', randomUUID()]),
         );
     }
 
@@ -343,7 +349,10 @@ export class GcpTaskSchedulerService implements IJobScheduler {
 
         // if the next execution time is the same as the real next execution time, we can schedule directly to the relay (no need for a meta-job)
         if (!recurring && ((nextExecutionTime && nextIsOccurrence) || !nextExecutionTime)) {
-            const gcpTaskId = await this.createRelayEndpointTask(request, nextExecutionTime);
+            const taskName = request.idempotencyKey
+                ? taskNameFor(['key', this.getQueueName(request.queue), request.idempotencyKey])
+                : undefined;
+            const gcpTaskId = await this.createRelayEndpointTask(request, nextExecutionTime, taskName);
             if (!gcpTaskId) {
                 throw new Error(`Failed to schedule direct relay task for ${safeUrl(request.target)}`);
             }

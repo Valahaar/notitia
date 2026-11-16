@@ -21,6 +21,8 @@ export const GCP_MAX_SCHEDULE_SECONDS = 30 * 24 * 60 * 60;
 export const TOMBSTONE_TTL_MS = 60 * 24 * 3600 * 1000;
 
 const UFID_DIGITS = 19;
+/** The shape of a ufid (and of a v1.3.4 direct task's auto id). Only such ids reach the cache on cancel. */
+const UFID_SHAPE = /^\d{19}$/;
 
 const generateNumericId = (length: number = UFID_DIGITS): string => {
     return Array.from({ length }, () => Math.floor(Math.random() * 10)).join('');
@@ -463,6 +465,15 @@ export class GcpTaskSchedulerService implements IJobScheduler {
                 this.logger.warn({ ufid }, 'keyed-schedule-cancelled: refusing a reused idempotency key');
                 throw new ConflictException('A schedule with this idempotency key was cancelled; use a new key');
             }
+            if (keyed) {
+                // A tracked id means this key's schedule exists: a retry creates nothing (not even a
+                // `create` task Cloud Tasks would accept again once its name's dedup window ended).
+                const tracked = await this.cacheManager.get<string>(this.getCacheKeyForJob(ufid)).catch(() => null);
+                if (tracked) {
+                    this.logger.log({ ufid }, 'keyed-schedule-exists');
+                    return { ufid, gcpTaskId: tracked.split('/').at(-1)! };
+                }
+            }
             this.logger.log(
                 { ufid, keyed, recurring, scheduleTime: nextExecutionTime!.toISOString(), target: safeUrl(request.target) },
                 'Scheduling meta-job',
@@ -480,7 +491,13 @@ export class GcpTaskSchedulerService implements IJobScheduler {
                 throw new Error(`[${ufid}] Failed to schedule meta-job task for ${safeUrl(request.target)}`);
             }
 
-            await this.setIdForUfid(ufid, gcpMetaTaskId, request.queue); // Store UFID -> GCP Meta Task ID (RID)
+            // Best effort: the meta task exists, so failing now would only make the caller create a
+            // second schedule. Cancel still stops a ufid it cannot find (tombstone by shape).
+            try {
+                await this.setIdForUfid(ufid, gcpMetaTaskId, request.queue);
+            } catch (err: any) {
+                this.logger.warn({ ufid, taskName: gcpMetaTaskId, error: err?.message ?? String(err) }, 'meta-tracked-id-write-failed');
+            }
             this.logger.log(
                 { ufid, gcpTaskId: gcpMetaTaskId },
                 'Meta-job scheduled',
@@ -502,31 +519,43 @@ export class GcpTaskSchedulerService implements IJobScheduler {
             'Attempting to cancel job',
         );
 
-        // A known ufid (recurring or long one-off): the tombstone is what stops the chain; deleting
-        // the tracked meta task only saves a delivery.
+        const directTask = await this.getTaskPath(this.getQueueName(queueName), jobId);
+
+        // Only a ufid-shaped id can be a schedule; any other id never reaches the cache.
+        if (!UFID_SHAPE.test(jobId)) {
+            return await this.deleteTaskByName(directTask, jobId);
+        }
+
+        // The tombstone is what stops a chain, so a ufid-shaped id is tombstoned even when no tracked
+        // id is found (its write failed, or it lives under a v1.3.4 key of a third queue): cancel
+        // then always ends the schedule, and cancelling twice answers true.
         const trackedTask = await this.getIdFromUfid(jobId, queueName);
-        if (trackedTask) {
-            await this.tombstone(jobId);
-            await this.clientHolder.call('deleteTask', (c, o) => c.deleteTask({ name: trackedTask }, o)).catch((err) => {
-                if (err?.code === 5) { // NOT_FOUND: the tracked task already ran or was replaced
-                    this.logger.log({ jobId, taskName: trackedTask }, 'cancel-tracked-meta-task-not-found');
-                    return;
-                }
-                this.logger.warn({ jobId, taskName: trackedTask, code: err?.code, error: err?.message ?? String(err) }, 'cancel-tracked-meta-task-delete-failed');
-            });
-            try {
-                await this.delUfid(jobId, queueName);
-            } catch (err: any) {
-                this.logger.warn({ jobId, error: err?.message ?? String(err) }, 'meta-tracked-id-delete-failed');
-            }
-            this.logger.log({ jobId }, 'schedule-cancelled: tombstone written');
+        await this.tombstone(jobId);
+
+        if (!trackedTask) {
+            // It may also be a v1.3.4 direct task, whose auto id has the same shape.
+            await this.deleteTaskByName(directTask, jobId);
+            this.logger.log({ jobId }, 'schedule-cancelled: tombstone written (no tracked id)');
             return true;
         }
 
-        // Otherwise a direct task id.
-        const name = await this.getTaskPath(this.getQueueName(queueName), jobId);
+        // Deleting the tracked meta task only saves a delivery: best effort.
+        await this.deleteTaskByName(trackedTask, jobId).catch((err) => {
+            this.logger.warn({ jobId, taskName: trackedTask, code: err?.code, error: err?.message ?? String(err) }, 'cancel-tracked-meta-task-delete-failed');
+        });
+        try {
+            await this.delUfid(jobId, queueName);
+        } catch (err: any) {
+            this.logger.warn({ jobId, error: err?.message ?? String(err) }, 'meta-tracked-id-delete-failed');
+        }
+        this.logger.log({ jobId }, 'schedule-cancelled: tombstone written');
+        return true;
+    }
+
+    /** Deletes a task by full name: true if deleted, false on NOT_FOUND; other errors are thrown. */
+    private async deleteTaskByName(name: string, jobId: string): Promise<boolean> {
         return await this.clientHolder.call('deleteTask', (c, o) => c.deleteTask({ name }, o)).then(() => true).catch((err) => {
-            if (err.code === 5) { // NOT_FOUND error code from GCP
+            if (err?.code === 5) { // NOT_FOUND error code from GCP
                 this.logger.warn(
                     { jobId, taskName: name },
                     'GCP task not found',

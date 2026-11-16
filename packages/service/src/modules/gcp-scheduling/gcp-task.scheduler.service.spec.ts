@@ -359,12 +359,62 @@ describe('GcpTaskSchedulerService cancel and keyed schedules', () => {
         deleteTask.mockRejectedValueOnce({ code: 5, details: 'not found' });
         await expect(scheduler.cancelJob('missing')).resolves.toBe(false);
 
+        expect(cache.get).not.toHaveBeenCalled();
         expect(cache.set).not.toHaveBeenCalled();
+        expect(cache.del).not.toHaveBeenCalled();
+    });
+
+    it('a non-ufid-shaped id never touches a tombstone', async () => {
+        const { scheduler, deleteTask, cache, store } = makeWorld();
+        store.set(`gcp_job:cancelled:${UFID}`, '2026-11-16T10:00:00.000Z');
+        deleteTask.mockRejectedValue({ code: 5, details: 'not found' });
+
+        await expect(scheduler.cancelJob(`cancelled:${UFID}`)).resolves.toBe(false);
+        await expect(scheduler.cancelJob(`${UFID}0`)).resolves.toBe(false);
+
+        expect(store.get(`gcp_job:cancelled:${UFID}`)).toBe('2026-11-16T10:00:00.000Z');
+        expect(cache.get).not.toHaveBeenCalled();
+        expect(cache.set).not.toHaveBeenCalled();
+        expect(cache.del).not.toHaveBeenCalled();
+    });
+
+    it('cancel of a ufid-shaped id with no tracked id tombstones it and tries the direct task', async () => {
+        const { scheduler, deleteTask, cache } = makeWorld();
+        deleteTask.mockRejectedValue({ code: 5, details: 'not found' });
+
+        await expect(scheduler.cancelJob(UFID)).resolves.toBe(true);
+
+        expect(cache.set).toHaveBeenCalledWith(`gcp_job:cancelled:${UFID}`, expect.anything(), SIXTY_DAYS_MS);
+        await expect(scheduler.isTombstoned(UFID)).resolves.toBe(true);
+        // A v1.3.4 direct task has a numeric auto id of the same shape.
+        expect(deleteTask.mock.calls[0][0]).toEqual({ name: taskPath('jobs', UFID) });
+    });
+
+    it('cancelling a schedule twice returns true both times', async () => {
+        const { scheduler, deleteTask } = makeWorld();
+        const ufid = await scheduler.scheduleJob(recurringReq());
+
+        await expect(scheduler.cancelJob(ufid)).resolves.toBe(true);
+        deleteTask.mockRejectedValue({ code: 5, details: 'not found' });
+        await expect(scheduler.cancelJob(ufid)).resolves.toBe(true);
+        await expect(scheduler.isTombstoned(ufid)).resolves.toBe(true);
+    });
+
+    it('a failed tracked-id write does not fail the create', async () => {
+        const { scheduler, cache, store } = makeWorld();
+        cache.set.mockRejectedValueOnce(new Error('mongo down'));
+
+        const ufid = await scheduler.scheduleJob(recurringReq());
+
+        expect(ufid).toMatch(/^\d{19}$/);
+        expect(store.has(`gcp_job:${ufid}`)).toBe(false);
     });
 
     it('a keyed create retried returns the same schedule id', async () => {
-        const { scheduler, createTask } = makeWorld();
+        const { scheduler, createTask, cache } = makeWorld();
         const req = recurringReq({ idempotencyKey: 'k' });
+        // The first create's tracked-id write fails, so the retry reaches Cloud Tasks.
+        cache.set.mockRejectedValueOnce(new Error('mongo down'));
 
         const first = await scheduler.scheduleJob(req);
         const second = await scheduler.scheduleJob(req);
@@ -374,6 +424,17 @@ describe('GcpTaskSchedulerService cancel and keyed schedules', () => {
         expect(second).toBe(first);
         expect(createTask).toHaveBeenCalledTimes(2);
         await expect(createTask.mock.results[1].value).rejects.toMatchObject({ code: 6 });
+    });
+
+    it('a keyed retry of a tracked schedule creates nothing', async () => {
+        const { scheduler, createTask } = makeWorld();
+        const req = recurringReq({ idempotencyKey: 'k' });
+
+        const first = await scheduler.scheduleJob(req);
+        const second = await scheduler.scheduleJob(req);
+
+        expect(second).toBe(first);
+        expect(createTask).toHaveBeenCalledTimes(1);
     });
 
     it('a keyed long one-off create retried returns the same schedule id', async () => {

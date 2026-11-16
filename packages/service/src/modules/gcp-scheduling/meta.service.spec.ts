@@ -86,7 +86,7 @@ function makeWorld(defaultQueue = 'jobs') {
             name: task.name.split('/').at(-1) as string,
             body: JSON.parse(Buffer.from(task.httpRequest.body).toString()),
         }));
-    return { scheduler, service, createTask, deleteTask, store, hooks, created };
+    return { scheduler, service, createTask, deleteTask, cache, store, hooks, created };
 }
 
 const recurring = (schedule: string, extra: Record<string, unknown> = {}) => ({
@@ -477,6 +477,30 @@ describe('MetaService', () => {
 
             expect(created()).toHaveLength(1);
             expect(store.has(`gcp_job:${ufid}`)).toBe(false);
+        });
+
+        it('cancel stops a schedule whose tracked-id write failed at create', async () => {
+            jest.useFakeTimers({ now: new Date('2026-11-16T09:30:00Z') });
+            const { scheduler, service, cache, store, created } = makeWorld();
+            cache.set.mockRejectedValueOnce(new Error('mongo down'));
+
+            const ufid = await scheduler.scheduleJob({
+                target: 'https://example.com/hook',
+                queue: 'jobs',
+                schedule: { type: 'recurring', schedule: '0 * * * *' },
+            } as any);
+            expect(store.has(`gcp_job:${ufid}`)).toBe(false);
+            const [initial] = created();
+
+            await expect(scheduler.cancelJob(ufid)).resolves.toBe(true);
+
+            jest.setSystemTime(new Date('2026-11-16T10:00:03Z'));
+            await service.processMetaJob(ufid, initial.body, {
+                taskName: initial.name,
+                etaSeconds: new Date(initial.body.occurrence).getTime() / 1000,
+            });
+
+            expect(created()).toHaveLength(1);
         });
 
         it('a cancel during a delivery stops the next occurrence', async () => {

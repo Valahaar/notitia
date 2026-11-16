@@ -15,7 +15,7 @@ Ensure consistent communication between the Python SDK and the NestJS service, a
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
 | `POST` | `/schedule` | Bearer token | Schedule a new job (immediate, one-time, or recurring) |
-| `DELETE` | `/schedule/:id` | Bearer token | Cancel a scheduled job by ID. A schedule id (ufid) is found with or without the `queue` query param; a direct task id is looked up in `queue` (default queue when absent) |
+| `DELETE` | `/schedule/:id` | Bearer token | Cancel a scheduled job by ID. A schedule id (ufid, 19 digits) is cancelled with or without the `queue` query param; a direct task id is deleted from `queue` (default queue when absent), so a direct task in a non-default queue still needs `queue` |
 | `POST` | `/relay` | Bearer token | Internal: GCP Cloud Tasks calls this to trigger actual HTTP execution |
 | `POST` | `/meta/:ufid` | Bearer token | Internal: GCP meta-task callback to re-evaluate and re-schedule long-term jobs |
 
@@ -62,7 +62,7 @@ Omitting `schedule` means immediate execution.
 
 - **202 Accepted** on successful scheduling, body contains `{ jobId: string }`.
 - **409 Conflict** on `POST /schedule` when a recurring or long one-off request's `idempotencyKey` belongs to a cancelled (tombstoned) schedule: "A schedule with this idempotency key was cancelled; use a new key". Not retryable; the caller needs a new key.
-- **200 OK** on successful cancellation, body contains `{ success: boolean }`. Cancelling a known schedule id always answers `true` (the schedule is tombstoned; its next meta delivery ends the chain without relaying); a direct task id answers `false` when Cloud Tasks has no such task.
+- **200 OK** on successful cancellation, body contains `{ success: boolean }`. Cancelling a 19-digit id always answers `true`, including a repeat cancel: it is tombstoned as a schedule (its next meta delivery ends the chain without relaying) and, when no tracked meta task is found, also deleted as a v1.3.4 direct task if one exists. Any other id is a direct task id and answers `false` when Cloud Tasks has no such task.
 - Error responses use NestJS default `HttpException` format via `HttpExceptionFilter` (`src/common/filters/http-exception.filter.ts`).
 
 #### GCP scheduling failures preserve retryability

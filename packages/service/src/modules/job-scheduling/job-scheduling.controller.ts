@@ -70,7 +70,7 @@ export class JobSchedulingController {
     @HttpCode(HttpStatus.OK)
     @ApiOperation({ summary: 'Cancel a scheduled HTTP call.' })
     @ApiParam({ name: 'id', description: 'The ID of the job to cancel (UFID or direct GCP task ID)', type: String })
-    @ApiResponse({ status: 200, description: 'Cancellation request processed. Returns true for a known schedule (now tombstoned) or a deleted direct task, false when the id is neither.', type: Boolean })
+    @ApiResponse({ status: 200, description: 'Cancellation request processed. Returns true for a 19-digit schedule id (always tombstoned, so a repeat cancel is also true) or a deleted direct task, false when a direct task id is not found.', type: Boolean })
     @ApiResponse({ status: 400, description: 'Invalid request (e.g., malformed ID).' })
     @ApiResponse({ status: 404, description: 'Job not found or already processed/cancelled.' })
     @ApiResponse({ status: 500, description: 'Internal server error during cancellation.' })

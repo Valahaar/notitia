@@ -12,7 +12,8 @@ export class ScheduleHelperService {
      * Supports RRule (prefixed with "RRULE:") and CRON strings.
      * @param scheduleString The RRule or CRON string.
      * @param fromDate The date from which to calculate the next occurrence.
-     * @param inclusive Whether the fromDate can be returned if it matches the schedule. For RRULE, 'after' is exclusive by default. For CRON, 'next' is exclusive.
+     * @param options.inclusive Whether the fromDate can be returned if it matches the schedule. For RRULE, 'after' is exclusive by default. For CRON, 'next' is exclusive.
+     * @param options.timezone IANA time zone the CRON expression is evaluated in (default UTC). An RRULE carries its own zone in DTSTART;TZID.
      * @returns The Date of the next occurrence, or null if none is found or an error occurs.
      */
     public calculateNextOccurrence(

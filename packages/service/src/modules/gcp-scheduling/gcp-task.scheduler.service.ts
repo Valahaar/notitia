@@ -12,6 +12,7 @@ import { safeUrl } from '../../common/utils/log.util';
 import { CloudTasksClientHolder, isBareInvalidArgument } from './cloud-tasks-client.holder';
 import { taskNameFor } from './task-name';
 import { randomUUID } from 'crypto';
+import { NOTITIA_OCCURRENCE_HEADER } from '../../common/constants';
 
 const GCP_MAX_SCHEDULE_SECONDS = 30 * 24 * 60 * 60;
 // const GCP_MAX_SCHEDULE_SECONDS = 30;
@@ -284,7 +285,7 @@ export class GcpTaskSchedulerService implements IJobScheduler {
      */
     public async createMetaEndpointTask(
         ufid: string,
-        originalRequest: ScheduleRequestDto & { isOccurrence?: boolean },
+        originalRequest: ScheduleRequestDto & { isOccurrence?: boolean; occurrence?: string },
         scheduleTime: Date,
         taskName?: string,
     ): Promise<string | undefined> {
@@ -327,7 +328,10 @@ export class GcpTaskSchedulerService implements IJobScheduler {
 
         let recurring = false;
         if (schedule.type === ScheduleType.RECURRING) {
-            realNextExecutionTime = this.scheduleHelperService.calculateNextOccurrence((schedule as RecurringScheduleDto).schedule, new Date()) || undefined;
+            const recurringSchedule = schedule as RecurringScheduleDto;
+            realNextExecutionTime = this.scheduleHelperService.calculateNextOccurrence(recurringSchedule.schedule, new Date(), {
+                timezone: recurringSchedule.timezone,
+            }) || undefined;
             recurring = true;
         } else if (schedule.type === ScheduleType.ON) {
             realNextExecutionTime = new Date((schedule as OneTimeScheduleDto).time);
@@ -340,8 +344,25 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         return { nextExecutionTime, realNextExecutionTime, recurring, nextIsOccurrence: nextExecutionTime?.getTime() === realNextExecutionTime?.getTime() };
     }
 
-    async scheduleInternal(request: ScheduleRequestDto): Promise<{ ufid?: string, gcpTaskId: string }> {
-        const { nextExecutionTime, recurring, nextIsOccurrence } = this.computeNextExecutionTime(request);
+    /** Returns the request with `X-Notitia-Occurrence` set to the occurrence time (ISO-8601 UTC). */
+    public withOccurrenceHeader<T extends ScheduleRequestDto>(request: T, occurrence: Date | string): T {
+        const iso = typeof occurrence === 'string' ? occurrence : occurrence.toISOString();
+        return { ...request, headers: { ...(request.headers || {}), [NOTITIA_OCCURRENCE_HEADER]: iso } };
+    }
+
+    async scheduleInternal(requestIn: ScheduleRequestDto): Promise<{ ufid?: string, gcpTaskId: string }> {
+        // Anchor an RRULE without DTSTART once, here; every later hop carries the anchored rule and timezone.
+        let request = requestIn;
+        if (requestIn.schedule?.type === ScheduleType.RECURRING) {
+            const recurring = requestIn.schedule as RecurringScheduleDto;
+            const anchored: RecurringScheduleDto = {
+                ...recurring,
+                schedule: this.scheduleHelperService.normalizeRecurringSchedule(recurring.schedule, recurring.timezone, new Date()),
+            };
+            request = { ...requestIn, schedule: anchored };
+        }
+
+        const { nextExecutionTime, realNextExecutionTime, recurring, nextIsOccurrence } = this.computeNextExecutionTime(request);
 
         // cases in which we need to schedule a meta-job:
         // - recurring job
@@ -352,7 +373,9 @@ export class GcpTaskSchedulerService implements IJobScheduler {
             const taskName = request.idempotencyKey
                 ? taskNameFor(['key', this.getQueueName(request.queue), request.idempotencyKey])
                 : undefined;
-            const gcpTaskId = await this.createRelayEndpointTask(request, nextExecutionTime, taskName);
+            // A scheduled direct relay knows its occurrence at create time; an immediate one has none.
+            const relayRequest = nextExecutionTime ? this.withOccurrenceHeader(request, nextExecutionTime) : request;
+            const gcpTaskId = await this.createRelayEndpointTask(relayRequest, nextExecutionTime, taskName);
             if (!gcpTaskId) {
                 throw new Error(`Failed to schedule direct relay task for ${safeUrl(request.target)}`);
             }
@@ -375,7 +398,7 @@ export class GcpTaskSchedulerService implements IJobScheduler {
                 'Scheduling meta-job',
             );
 
-            const gcpMetaTaskId = await this.createMetaEndpointTask(ufid, { ...request, isOccurrence: nextIsOccurrence }, nextExecutionTime!);
+            const gcpMetaTaskId = await this.createMetaEndpointTask(ufid, { ...request, isOccurrence: nextIsOccurrence, occurrence: realNextExecutionTime?.toISOString() }, nextExecutionTime!);
             if (!gcpMetaTaskId) {
                 throw new Error(`[${ufid}] Failed to schedule meta-job task for ${safeUrl(request.target)}`);
             }

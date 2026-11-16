@@ -12,7 +12,7 @@ export class MetaService {
         @Inject(GcpTaskSchedulerService) private readonly gcpTaskScheduler: GcpTaskSchedulerService,
     ) { }
 
-    async processMetaJob(ufid: string, originalRequest: ScheduleRequestDto & { isOccurrence: boolean }, queueName?: string): Promise<void> {
+    async processMetaJob(ufid: string, originalRequest: ScheduleRequestDto & { isOccurrence: boolean; occurrence?: string }, queueName?: string): Promise<void> {
         this.logger.log(
             { ufid, isOccurrence: originalRequest.isOccurrence, target: safeUrl(originalRequest.target) },
             'Processing meta-job',
@@ -28,7 +28,9 @@ export class MetaService {
             return;
         }
 
-        const { nextExecutionTime, recurring, nextIsOccurrence } = this.gcpTaskScheduler.computeNextExecutionTime(originalRequest);
+        const { nextExecutionTime, realNextExecutionTime, recurring, nextIsOccurrence } = this.gcpTaskScheduler.computeNextExecutionTime(originalRequest);
+        // The occurrence the NEXT meta task serves (the current one, if any, is originalRequest.occurrence).
+        const nextOccurrence = realNextExecutionTime?.toISOString();
         const { schedule, ...executionPayload } = originalRequest;
 
         if (recurring) {
@@ -42,12 +44,16 @@ export class MetaService {
                         'X-Notitia-Task-ID': ufid,
                     },
                 };
-                await this.gcpTaskScheduler.createRelayEndpointTask(executionPayloadWithTaskId);
+                await this.gcpTaskScheduler.createRelayEndpointTask(
+                    originalRequest.occurrence
+                        ? this.gcpTaskScheduler.withOccurrenceHeader(executionPayloadWithTaskId, originalRequest.occurrence)
+                        : executionPayloadWithTaskId,
+                );
             }
 
             if (nextExecutionTime) {
                 // running recurrence, so we need to re-schedule the meta-job
-                const newMetaGcpTaskId = await this.gcpTaskScheduler.createMetaEndpointTask(ufid, { ...originalRequest, isOccurrence: nextIsOccurrence }, nextExecutionTime!);
+                const newMetaGcpTaskId = await this.gcpTaskScheduler.createMetaEndpointTask(ufid, { ...originalRequest, isOccurrence: nextIsOccurrence, occurrence: nextOccurrence }, nextExecutionTime!);
                 if (!newMetaGcpTaskId) {
                     this.logger.error(
                         { queue, ufid },
@@ -83,7 +89,10 @@ export class MetaService {
                     'X-Notitia-Task-ID': ufid,
                 },
             };
-            const newTaskId = await this.gcpTaskScheduler.createRelayEndpointTask(requestWithTaskId, nextExecutionTime);
+            const newTaskId = await this.gcpTaskScheduler.createRelayEndpointTask(
+                nextExecutionTime ? this.gcpTaskScheduler.withOccurrenceHeader(requestWithTaskId, nextExecutionTime) : requestWithTaskId,
+                nextExecutionTime,
+            );
             if (newTaskId) {
                 await this.gcpTaskScheduler.setIdForUfid(ufid, newTaskId);
                 this.logger.log(
@@ -99,7 +108,7 @@ export class MetaService {
             }
         } else {
             // if the next execution time is different from the real next execution time, we need to re-schedule the meta-job
-            const newMetaGcpTaskId = await this.gcpTaskScheduler.createMetaEndpointTask(ufid, { ...originalRequest, isOccurrence: nextIsOccurrence }, nextExecutionTime!);
+            const newMetaGcpTaskId = await this.gcpTaskScheduler.createMetaEndpointTask(ufid, { ...originalRequest, isOccurrence: nextIsOccurrence, occurrence: nextOccurrence }, nextExecutionTime!);
             if (newMetaGcpTaskId) {
                 await this.gcpTaskScheduler.setIdForUfid(ufid, newMetaGcpTaskId);
                 this.logger.log(

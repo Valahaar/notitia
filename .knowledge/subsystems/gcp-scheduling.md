@@ -22,6 +22,7 @@ Production job scheduler that uses Google Cloud Tasks to execute HTTP requests a
 - A job scheduled within 30 days of now goes directly as a **relay task** (GCP task → `/relay` → `HttpExecutorService`).
 - A job beyond 30 days goes as a **meta-task** (GCP task → `/meta/:ufid` → recompute → create relay or another meta).
 - Every meta-job has a **UFID** (User-Friendly ID, a UUID) stored in the Keyv cache (Mongo in prod) mapping to the current GCP Task ID. This allows cancellation of the current GCP task by UFID lookup.
+- `scheduleInternal` normalizes a recurring schedule once (anchors an RRULE without DTSTART, keeps `timezone`) and sends that anchored rule onward in every meta payload. Meta payloads carry `occurrence` (ISO-8601 UTC of the occurrence they serve; `isOccurrence` stays for old readers), and scheduled relays (direct one-offs with a time, recurring and long one-off final hops) send `X-Notitia-Occurrence`; immediate ones do not.
 - Recurring jobs: after each execution, the scheduler computes the next occurrence and creates a new task (relay or meta depending on horizon).
 - `GCP_MAX_SCHEDULE_SECONDS = 2,592,000` (30 days) is the hard ceiling from GCP Cloud Tasks.
 

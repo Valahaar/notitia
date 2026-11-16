@@ -19,6 +19,8 @@ Lightweight scheduler for local development and testing that requires no externa
 - Each scheduled job has exactly one active timeout in the map.
 - Cancellation clears the timeout and removes the map entry.
 - Recurring jobs chain: after each execution, `scheduleNextRecurringInstance()` computes the next time and sets a new timeout.
+- Recurring creation anchors an RRULE without DTSTART once (`normalizeRecurringSchedule`), and every occurrence is computed with the request's `timezone` (cron `tz`; RRULE via `DTSTART;TZID`).
+- Every execution sends the same headers a GCP relay does: `X-Notitia-Task-ID` (the schedule's `jobId`; the executor's log id is that same `jobId`, no `-<ms>` suffix) and `X-Notitia-Occurrence` (the occurrence time, ISO-8601 UTC; constants in `src/common/constants.ts`). A one-off with a future time sends its target time as the occurrence; an immediate one sends none.
 
 ## External Dependencies
 

@@ -2,6 +2,7 @@ import { HttpException, Logger } from '@nestjs/common';
 import { GcpTaskSchedulerService } from './gcp-task.scheduler.service';
 import { CloudTasksClientHolder } from './cloud-tasks-client.holder';
 import { taskNameFor } from './task-name';
+import { ScheduleHelperService } from '../../common/services/schedule.helper.service';
 
 jest.mock('@google-cloud/tasks', () => ({
     CloudTasksClient: jest.fn().mockImplementation(() => ({})),
@@ -162,5 +163,70 @@ describe('GcpTaskSchedulerService.scheduleJob naming', () => {
 
         expect(a).not.toBe(b);
         expect(a).toMatch(/^[0-9a-f]{40}$/);
+    });
+});
+
+describe('GcpTaskSchedulerService occurrence', () => {
+    beforeEach(() => {
+        jest.spyOn(Logger.prototype, 'error').mockImplementation();
+        jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+        jest.spyOn(Logger.prototype, 'log').mockImplementation();
+        jest.spyOn(Logger.prototype, 'debug').mockImplementation();
+    });
+
+    afterEach(() => {
+        jest.useRealTimers();
+        jest.restoreAllMocks();
+    });
+
+    const bodyOf = (createTask: jest.Mock, call = 0) =>
+        JSON.parse(Buffer.from(createTask.mock.calls[call][0].task.httpRequest.body).toString());
+
+    function makeRealHelperService(createTask: jest.Mock) {
+        const service = makeService(createTask);
+        (service as any).scheduleHelperService = new ScheduleHelperService();
+        (service as any).cacheManager = { set: jest.fn(), get: jest.fn(), del: jest.fn() };
+        return service;
+    }
+
+    it('a scheduled direct relay carries X-Notitia-Occurrence', async () => {
+        jest.useFakeTimers({ now: new Date('2026-11-16T10:00:00Z') });
+        const createTask = jest.fn().mockImplementation(async ({ task }: any) => [{ name: task.name }]);
+        const service = makeRealHelperService(createTask);
+
+        await service.scheduleJob({
+            target: 'https://example.com/hook',
+            schedule: { type: 'on', time: '2026-12-01T09:00:00Z' },
+        } as any);
+
+        expect(bodyOf(createTask).headers).toMatchObject({ 'X-Notitia-Occurrence': '2026-12-01T09:00:00.000Z' });
+    });
+
+    it('an immediate request has no occurrence header', async () => {
+        const createTask = jest.fn().mockImplementation(async ({ task }: any) => [{ name: task.name }]);
+        const service = makeRealHelperService(createTask);
+
+        await service.scheduleJob({ target: 'https://example.com/hook', headers: { A: 'b' } } as any);
+
+        const headers = bodyOf(createTask).headers ?? {};
+        expect(headers['X-Notitia-Occurrence']).toBeUndefined();
+        expect(headers.A).toBe('b');
+    });
+
+    it('a recurring create sends occurrence and the anchored rule on the meta payload', async () => {
+        jest.useFakeTimers({ now: new Date('2026-11-16T10:02:30Z') });
+        const createTask = jest.fn().mockImplementation(async ({ task }: any) => [{ name: task.name }]);
+        const service = makeRealHelperService(createTask);
+
+        await service.scheduleJob({
+            target: 'https://example.com/hook',
+            schedule: { type: 'recurring', schedule: 'RRULE:FREQ=HOURLY;INTERVAL=6', timezone: 'Europe/Rome' },
+        } as any);
+
+        const body = bodyOf(createTask);
+        expect(body.schedule.schedule).toBe('DTSTART;TZID=Europe/Rome:20261116T110230\nRRULE:FREQ=HOURLY;INTERVAL=6');
+        expect(body.schedule.timezone).toBe('Europe/Rome');
+        expect(body.occurrence).toBe('2026-11-16T16:02:30.000Z');
+        expect(body.isOccurrence).toBe(true);
     });
 });

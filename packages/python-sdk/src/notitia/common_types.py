@@ -3,6 +3,12 @@ from enum import Enum
 from typing import Optional, Dict, Any, Union
 
 
+# Headers the service sends on every delivered task. Consumers dedupe on the
+# pair (task id, occurrence).
+NOTITIA_TASK_ID_HEADER = "X-Notitia-Task-ID"
+NOTITIA_OCCURRENCE_HEADER = "X-Notitia-Occurrence"
+
+
 class ScheduleType(str, Enum):
     ON = "on"
     RECURRING = "recurring"
@@ -30,6 +36,9 @@ class OneTimeSchedule(ScheduleBase):
 @dataclass
 class RecurringSchedule(ScheduleBase):
     schedule: str  # CRON string or RRule string
+    # IANA time zone the schedule is evaluated in (e.g. "Europe/Rome").
+    # None → the service default (UTC).
+    timezone: Optional[str] = None
     type: ScheduleType = field(default=ScheduleType.RECURRING, init=False)
 
 
@@ -51,3 +60,7 @@ class ScheduleRequest:
     # using the GCP scheduler. GCP accepts 15–1800 (30 min). None → server
     # default (DEFAULT_TIMEOUT_SECONDS), else Cloud Tasks' 600s default.
     timeout: Optional[int] = None
+    # Caller-supplied idempotency key, sent as `idempotencyKey`. The service
+    # derives a deterministic Cloud Task name from it, so retries cannot
+    # create duplicates. When set, the SDK also retries network errors.
+    idempotency_key: Optional[str] = None

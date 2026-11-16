@@ -11,6 +11,8 @@ from .common_types import (
     RecurringSchedule,
     Schedule,  # Union type
     ScheduleRequest,
+    NOTITIA_TASK_ID_HEADER,
+    NOTITIA_OCCURRENCE_HEADER,
 )
 
 # Export configuration and event definition types
@@ -35,6 +37,8 @@ __all__ = [
     "RecurringSchedule",
     "Schedule",
     "ScheduleRequest",
+    "NOTITIA_TASK_ID_HEADER",
+    "NOTITIA_OCCURRENCE_HEADER",
     "NotitiaClientConfig",
     "PreparedEventData",
     "EventConfig",

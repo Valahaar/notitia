@@ -6,7 +6,7 @@ from dataclasses import asdict
 
 from .types import NotitiaClientConfig
 from .common_types import ScheduleRequest, HttpMethod, ScheduleType
-from .retry import _compute_delay
+from .retry import _backoff_delay, _compute_delay
 
 
 class NotitiaError(Exception):
@@ -54,15 +54,26 @@ class LowLevelClient:
     async def _send_with_retries(
         self,
         attempt_fn: Callable[[], Awaitable[httpx.Response]],
+        *,
+        retry_transport_errors: bool = False,
     ) -> httpx.Response:
         """Drive a retry loop around a single-attempt closure.
 
         Returns the final response — caller is responsible for interpreting
-        status codes. Network errors raised by attempt_fn propagate."""
+        status codes. Network errors raised by attempt_fn propagate, unless
+        retry_transport_errors is set (only safe for idempotent requests), in
+        which case httpx.TransportError is retried with exponential backoff
+        and re-raised on the last attempt."""
         cfg = self.retry_config
         response: httpx.Response | None = None
         for attempt in range(1, cfg.max_attempts + 1):
-            response = await attempt_fn()
+            try:
+                response = await attempt_fn()
+            except httpx.TransportError:
+                if not retry_transport_errors or attempt == cfg.max_attempts:
+                    raise
+                await asyncio.sleep(_backoff_delay(attempt, cfg))
+                continue
 
             if response.status_code not in cfg.retry_status_codes:
                 return response
@@ -104,6 +115,9 @@ class LowLevelClient:
                 k: v for k, v in filtered_data["schedule"].items() if v is not None
             }
 
+        if "idempotency_key" in filtered_data:
+            filtered_data["idempotencyKey"] = filtered_data.pop("idempotency_key")
+
         if self.default_queue and not filtered_data.get("queue"):
             filtered_data["queue"] = self.default_queue
 
@@ -111,7 +125,10 @@ class LowLevelClient:
             return await self._http_client.post(url, json=filtered_data)
 
         try:
-            response = await self._send_with_retries(_attempt)
+            response = await self._send_with_retries(
+                _attempt,
+                retry_transport_errors=schedule_request.idempotency_key is not None,
+            )
 
             if response.status_code != 202:
                 error_data: Any = None

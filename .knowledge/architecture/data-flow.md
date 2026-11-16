@@ -54,7 +54,7 @@ JobSchedulingController.scheduleJob(dto: ScheduleRequestDto)
 **GCP path** (`gcp-task.scheduler.service.ts`):
 1. `computeNextExecutionTime()` uses `ScheduleHelperService` to parse CRON/RRule and find next occurrence.
 2. If within 30 days → `createRelayEndpointTask()` creates a GCP task targeting `/relay` on the service itself.
-3. If beyond 30 days → `createMetaEndpointTask()` creates a meta-task targeting `/meta/:ufid`, storing UFID→GCP Task ID in Redis.
+3. If beyond 30 days → `createMetaEndpointTask()` creates a meta-task targeting `/meta/:ufid`, best-effort tracking UFID→GCP Task ID in the Keyv cache (Mongo in production). Recurring and long one-off schedules use meta-tasks named by occurrence (see `subsystems/gcp-scheduling`).
 4. Returns job ID (UFID for meta-jobs, GCP task name segment for direct relay).
 
 **In-memory path** (`in-memory.scheduler.service.ts`):
@@ -65,7 +65,7 @@ JobSchedulingController.scheduleJob(dto: ScheduleRequestDto)
 ### Phase 4: Target Execution
 
 Both paths ultimately call `HttpExecutorService.executeHttpRequest()` (`src/common/services/http-executor.service.ts`), which:
-1. Injects `X-Notitia-Task-ID` header with the job ID.
+1. Injects `X-Notitia-Task-ID` header with the job ID, and `X-Notitia-Occurrence` (ISO-8601 UTC) with the scheduled time of the occurrence for scheduled requests (not immediate ones).
 2. Sends the HTTP request via axios to the target URL with the configured method, payload, headers, and params.
 3. Logs request duration and any errors.
 
@@ -73,8 +73,8 @@ For recurring jobs, after execution the scheduler computes the next occurrence a
 
 ## Failure Modes
 
-- **SDK**: Non-202 responses raise `NotitiaError` with status, message, and response data. No automatic retries.
-- **GCP relay/meta**: GCP Cloud Tasks handles retries per queue config. The service does not retry task execution; its only retry is on task *creation*, where `GcpTaskSchedulerService.createTask` retries a bare `INVALID_ARGUMENT` (see `subsystems/gcp-scheduling`).
+- **SDK**: Non-202 responses raise `NotitiaError` with status, message, and response data, after the SDK retries `429`/`5xx` (and network errors when the request carries an `idempotency_key`).
+- **GCP relay/meta**: GCP Cloud Tasks handles retries per queue config. The service does not retry task execution; its only retry is on task *creation*, where `CloudTasksClientHolder` rebuilds the client and retries on `DEADLINE_EXCEEDED`/`UNAVAILABLE` and retries a bare `INVALID_ARGUMENT` (see `subsystems/gcp-scheduling`).
 - **In-memory**: Errors in `executeJob()` are caught and logged but not retried.
 - **Schedule exhaustion**: When a recurring schedule has no more occurrences, `ScheduleHelperService` returns `null` and the job quietly stops.
 

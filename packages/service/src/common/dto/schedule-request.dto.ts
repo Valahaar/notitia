@@ -10,8 +10,10 @@ import {
     IsInt,
     Min,
     Max,
+    MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { IsIanaTimeZone } from './is-iana-time-zone.validator';
 
 export enum ScheduleType {
     ON = 'on',
@@ -45,6 +47,15 @@ export class RecurringScheduleDto extends ScheduleBaseDto {
     @ApiProperty({ type: String, description: 'CRON string or RRule string for recurring events.' })
     @IsString()
     schedule: string;
+
+    @ApiPropertyOptional({
+        type: String,
+        example: 'Europe/Rome',
+        description: 'IANA time zone the schedule is evaluated in (default UTC). An RRULE without DTSTART is anchored at creation time in this zone.',
+    })
+    @IsOptional()
+    @IsIanaTimeZone()
+    timezone?: string;
 
     @ApiProperty({ enum: [ScheduleType.RECURRING], default: ScheduleType.RECURRING })
     type: ScheduleType.RECURRING = ScheduleType.RECURRING;
@@ -113,4 +124,14 @@ export class ScheduleRequestDto<T extends ScheduleBaseDto = ScheduleBaseDto> {
     @Min(15)
     @Max(1800)
     timeout?: number;
+
+    @ApiPropertyOptional({
+        type: String,
+        maxLength: 256,
+        description: 'Makes the request idempotent: a retry with the same key (and queue) returns the same job id instead of creating a second task or schedule. Cloud Tasks refuses a name for about an hour after its task ran or was deleted, so use a new key for each task you want. For a recurring or long one-off schedule the key derives the schedule id, and a key whose schedule was cancelled is refused with 409, so use one key per schedule version (for example a document id plus an edit counter).',
+    })
+    @IsOptional()
+    @IsString()
+    @MaxLength(256)
+    idempotencyKey?: string;
 }

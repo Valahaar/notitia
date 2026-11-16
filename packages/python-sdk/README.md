@@ -229,7 +229,21 @@ See the [EventsBus guide](docs/events-bus.md) for the full API including the `re
 | Immediate | Omit `schedule` | Executes ASAP |
 | One-time | `OneTimeSchedule(time="2025-12-25T10:00:00Z")` | Executes at specified UTC time |
 | Recurring (CRON) | `RecurringSchedule(schedule="0 0 * * *")` | Repeats on CRON schedule |
-| Recurring (RRULE) | `RecurringSchedule(schedule="RRULE:FREQ=DAILY;BYHOUR=9")` | Repeats on RRULE schedule |
+| Recurring (RRULE) | `RecurringSchedule(schedule="RRULE:FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0")` | Repeats on RRULE schedule |
+
+An RRULE without `DTSTART` takes its unset fields from the creation time, so pin `BYMINUTE`/`BYSECOND` (or give a `DTSTART`); `BYHOUR=9` alone fires at 09:mm:ss, the minute and second you created it.
+
+## Recurring schedules
+
+```python
+from notitia import RecurringSchedule
+
+schedule = RecurringSchedule(schedule="0 9 * * *", timezone="Europe/Rome")
+```
+
+- **Time zone:** `timezone` is an optional IANA name; the CRON/RRULE is evaluated in it (so 09:00 stays 09:00 across DST). Omit it for the service default (UTC).
+- **Idempotency key is per schedule version:** a key whose schedule has been cancelled gets a `409`, so an edit must use a new key. Build keys from the schedule document id plus an edit counter, e.g. `f"{doc_id}:{edit_counter}"`.
+- **Deduplicating deliveries:** delivery is at-least-once. Read `NOTITIA_TASK_ID_HEADER` (`X-Notitia-Task-ID`) and `NOTITIA_OCCURRENCE_HEADER` (`X-Notitia-Occurrence`) from the incoming request and dedupe on the pair `(task id, occurrence)`.
 
 ## Error Handling
 
@@ -247,7 +261,7 @@ except NotitiaError as e:
     print(e.cause)          # Underlying exception (if any)
 ```
 
-429 and 5xx responses are automatically retried before `NotitiaError` is raised. The retry policy is configurable via `RetryConfig` (see **Configuration** above).
+429 and 5xx responses are automatically retried before `NotitiaError` is raised. The retry policy is configurable via `RetryConfig` (see **Configuration** above). Network errors (connection failures, timeouts) are not retried by default, since resending a schedule request could create a duplicate. Pass `idempotency_key` (on `ScheduleRequest`, `PreparedEventData`, or `send()`) to make a request safe to retry: the service derives a deterministic task name from the key so repeats cannot duplicate, and the SDK then also retries network errors with the same backoff.
 
 ## Further Reading
 

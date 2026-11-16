@@ -319,28 +319,6 @@ describe('GcpTaskSchedulerService cancel and keyed schedules', () => {
         expect(store.has(`gcp_job:${ufid}`)).toBe(false);
     });
 
-    it('cancel reads a tracked id stored by v1.3.4', async () => {
-        const { scheduler, deleteTask, store } = makeWorld('jobs');
-        store.set(`gcp_job:jobs:${UFID}`, '5550001');
-
-        await expect(scheduler.cancelJob(UFID)).resolves.toBe(true);
-
-        expect(deleteTask).toHaveBeenCalledTimes(1);
-        expect(deleteTask.mock.calls[0][0]).toEqual({ name: taskPath('meta-jobs', '5550001') });
-        await expect(scheduler.isTombstoned(UFID)).resolves.toBe(true);
-        expect(store.has(`gcp_job:jobs:${UFID}`)).toBe(false);
-    });
-
-    it('cancel reads a v1.3.4 tracked id stored under the request queue', async () => {
-        const { scheduler, deleteTask, store } = makeWorld('default');
-        store.set(`gcp_job:jobs:${UFID}`, '5550001');
-
-        await expect(scheduler.cancelJob(UFID, 'jobs')).resolves.toBe(true);
-
-        expect(deleteTask.mock.calls[0][0]).toEqual({ name: taskPath('meta-jobs', '5550001') });
-        await expect(scheduler.isTombstoned(UFID)).resolves.toBe(true);
-    });
-
     it('cancel of a known ufid succeeds when its tracked meta task is already gone', async () => {
         const { scheduler, deleteTask } = makeWorld();
         const ufid = await scheduler.scheduleJob(recurringReq());

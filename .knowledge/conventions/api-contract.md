@@ -63,7 +63,7 @@ Omitting `schedule` means immediate execution.
 
 - **202 Accepted** on successful scheduling, body contains `{ jobId: string }`.
 - **409 Conflict** on `POST /schedule` when a recurring or long one-off request's `idempotencyKey` belongs to a cancelled (tombstoned) schedule: "A schedule with this idempotency key was cancelled; use a new key". Not retryable; the caller needs a new key.
-- **200 OK** on successful cancellation, body contains `{ success: boolean }`. Cancelling a 19-digit id always answers `true`, including a repeat cancel: it is tombstoned as a schedule (its next meta delivery ends the chain without relaying) and, when no tracked meta task is found, also deleted as a v1.3.4 direct task if one exists. Any other id is a direct task id and answers `false` when Cloud Tasks has no such task.
+- **200 OK** on successful cancellation, body contains `{ success: boolean }`. Cancelling a 19-digit id always answers `true`, including a repeat cancel: it is tombstoned as a schedule (its next meta delivery ends the chain without relaying) and, when no tracked meta task is found, also deleted as a direct task if one exists. Any other id is a direct task id and answers `false` when Cloud Tasks has no such task.
 - Error responses use NestJS default `HttpException` format via `HttpExceptionFilter` (`src/common/filters/http-exception.filter.ts`).
 
 #### GCP scheduling failures preserve retryability

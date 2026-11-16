@@ -116,30 +116,14 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         return `meta-${this.getQueueName(queueName)}`;
     }
 
-    /** Forgets the tracked meta task of `ufid`, under the current key and the v1.3.4 forms. */
-    async delUfid(ufid: string, queueName?: string): Promise<void> {
-        for (const key of [this.getCacheKeyForJob(ufid), ...this.legacyCacheKeysForJob(ufid, queueName)]) {
-            await this.cacheManager.del(key);
-        }
+    /** Forgets the tracked meta task of `ufid`. */
+    async delUfid(ufid: string): Promise<void> {
+        await this.cacheManager.del(this.getCacheKeyForJob(ufid));
     }
 
-    /**
-     * The full resource name of the tracked meta task of `ufid`, or null when `ufid` is not a known
-     * schedule. Reads `gcp_job:<ufid>`, then the v1.3.4 `gcp_job:<queue>:<ufid>` forms for the
-     * request queue and the default queue (their value is a short task id in `meta-<queue>`).
-     */
-    async getIdFromUfid(ufid: string, queueName?: string): Promise<string | null> {
-        const tracked = await this.cacheManager.get<string>(this.getCacheKeyForJob(ufid));
-        if (tracked) {
-            return tracked;
-        }
-        for (const queue of this.legacyQueues(queueName)) {
-            const legacyId = await this.cacheManager.get<string>(this.legacyCacheKey(ufid, queue));
-            if (legacyId) {
-                return await this.getTaskPath(this.getMetaQueueName(queue), legacyId);
-            }
-        }
-        return null;
+    /** The full resource name of the tracked meta task of `ufid`, or null when none is tracked. */
+    async getIdFromUfid(ufid: string): Promise<string | null> {
+        return (await this.cacheManager.get<string>(this.getCacheKeyForJob(ufid))) ?? null;
     }
 
     /** Tracks `taskName` (in the meta queue of `queueName`) as the current meta task of `ufid`. */
@@ -164,22 +148,6 @@ export class GcpTaskSchedulerService implements IJobScheduler {
 
     private getTombstoneKey(ufid: string): string {
         return `gcp_job:cancelled:${ufid}`;
-    }
-
-    /**
-     * The queues whose v1.3.4 `gcp_job:<queue>:<ufid>` key may hold a tracked id: the request's, then
-     * the default. A queue named `cancelled` is skipped: its old key is the tombstone's.
-     */
-    private legacyQueues(queueName?: string): string[] {
-        return [...new Set([this.getQueueName(queueName), this.getQueueName()])].filter((queue) => queue !== 'cancelled');
-    }
-
-    private legacyCacheKey(ufid: string, queue: string): string {
-        return `gcp_job:${queue}:${ufid}`;
-    }
-
-    private legacyCacheKeysForJob(ufid: string, queueName?: string): string[] {
-        return this.legacyQueues(queueName).map((queue) => this.legacyCacheKey(ufid, queue));
     }
 
     private async getQueuePath(queueName: string): Promise<string> {
@@ -527,9 +495,9 @@ export class GcpTaskSchedulerService implements IJobScheduler {
         }
 
         // The tombstone is what stops a chain, so a ufid-shaped id is tombstoned even when no tracked
-        // id is found (its write failed, or it lives under a v1.3.4 key of a third queue): cancel
-        // then always ends the schedule, and cancelling twice answers true.
-        const trackedTask = await this.getIdFromUfid(jobId, queueName);
+        // id is found (its write failed): cancel then always ends the schedule, and cancelling twice
+        // answers true.
+        const trackedTask = await this.getIdFromUfid(jobId);
         await this.tombstone(jobId);
 
         if (!trackedTask) {
@@ -544,7 +512,7 @@ export class GcpTaskSchedulerService implements IJobScheduler {
             this.logger.warn({ jobId, taskName: trackedTask, code: err?.code, error: err?.message ?? String(err) }, 'cancel-tracked-meta-task-delete-failed');
         });
         try {
-            await this.delUfid(jobId, queueName);
+            await this.delUfid(jobId);
         } catch (err: any) {
             this.logger.warn({ jobId, error: err?.message ?? String(err) }, 'meta-tracked-id-delete-failed');
         }

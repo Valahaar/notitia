@@ -23,6 +23,5 @@ export class GcpMetaTaskPayloadDto extends ScheduleRequestDto {
 
 /**
  * What a meta task actually carries: the original request plus the occurrence it serves.
- * Payloads written by v1.3.4 have no `occurrence`.
  */
 export type GcpMetaTaskPayload = ScheduleRequestDto & { isOccurrence?: boolean; occurrence?: string };

@@ -1,5 +1,5 @@
 import { Injectable, Logger, Inject } from '@nestjs/common';
-import { OneTimeScheduleDto, RecurringScheduleDto, ScheduleType } from '../../common/dto/schedule-request.dto';
+import { RecurringScheduleDto, ScheduleType } from '../../common/dto/schedule-request.dto';
 import { GcpTaskSchedulerService, GCP_MAX_SCHEDULE_SECONDS } from './gcp-task.scheduler.service';
 import { ScheduleHelperService } from '../../common/services/schedule.helper.service';
 import { GcpMetaTaskPayload } from './dto/gcp-meta-task-payload.dto';
@@ -43,22 +43,14 @@ export class MetaService {
         // 1. The tombstone is the only stop signal; a missing tracked id is not.
         if (await this.isTombstoned(ufid)) {
             this.logger.log({ ufid, deliveringTask: delivery.taskName }, 'meta-chain-cancelled');
-            await this.bestEffort(() => this.gcpTaskScheduler.delUfid(ufid, queue), { ufid }, 'meta-tracked-id-delete-failed');
+            await this.bestEffort(() => this.gcpTaskScheduler.delUfid(ufid), { ufid }, 'meta-tracked-id-delete-failed');
             return;
         }
 
-        // v1.3.4 payloads (no `occurrence`) keep v1.3.4's stale rule: a v1.3.4 cancel deleted the
-        // tracked id but wrote no tombstone, so an untracked ufid is a cancelled chain. Drop this
-        // one release after N2, once no v1.3.4 meta task can still be pending.
-        if (!payload.occurrence && !(await this.gcpTaskScheduler.getIdFromUfid(ufid, queue))) {
-            this.logger.log({ ufid, deliveringTask: delivery.taskName }, 'meta-chain-stale: v1.3.4 payload without a tracked id');
-            return;
-        }
-
-        const T = this.occurrenceOf(payload, delivery, now);
+        const T = this.occurrenceOf(payload);
         if (!T) {
-            this.logger.log({ ufid }, 'meta-chain-ended: rule has no further occurrence');
-            await this.bestEffort(() => this.gcpTaskScheduler.delUfid(ufid, queue), { ufid }, 'meta-tracked-id-delete-failed');
+            this.logger.error({ ufid, deliveringTask: delivery.taskName }, 'meta-chain-dropped: payload has no valid occurrence');
+            await this.bestEffort(() => this.gcpTaskScheduler.delUfid(ufid), { ufid }, 'meta-tracked-id-delete-failed');
             return;
         }
         const occurrence = T.toISOString();
@@ -88,7 +80,7 @@ export class MetaService {
         const successor = this.successorOf(ufid, payload, T, now);
         if (!successor) {
             this.logger.log({ ufid, occurrence }, 'meta-chain-ended: rule has no further occurrence');
-            await this.bestEffort(() => this.gcpTaskScheduler.delUfid(ufid, queue), { ufid }, 'meta-tracked-id-delete-failed');
+            await this.bestEffort(() => this.gcpTaskScheduler.delUfid(ufid), { ufid }, 'meta-tracked-id-delete-failed');
             return;
         }
         const next = await this.scheduleMetaFor(ufid, payload, successor, delivery, now);
@@ -111,33 +103,13 @@ export class MetaService {
         }
     }
 
-    /**
-     * The occurrence T this delivery serves: the payload's `occurrence`; for a v1.3.4 payload
-     * (no `occurrence`), the one-off's time, the next occurrence after now for an intermediate
-     * recurring hop, else the delivering task's ETA. Null when a legacy recurring hop has no next
-     * occurrence.
-     */
-    private occurrenceOf(payload: GcpMetaTaskPayload, delivery: MetaDelivery, now: Date): Date | null {
-        if (payload.occurrence) {
-            const t = new Date(payload.occurrence);
-            if (!Number.isNaN(t.getTime())) {
-                return t;
-            }
-            this.logger.warn({ occurrence: payload.occurrence }, 'meta-payload-occurrence-invalid');
+    /** The occurrence T this delivery serves: the payload's `occurrence`, or null when it is missing or invalid. */
+    private occurrenceOf(payload: GcpMetaTaskPayload): Date | null {
+        if (!payload.occurrence) {
+            return null;
         }
-        if (payload.schedule?.type === ScheduleType.ON) {
-            return new Date((payload.schedule as OneTimeScheduleDto).time);
-        }
-        if (payload.schedule?.type === ScheduleType.RECURRING && payload.isOccurrence === false) {
-            // A v1.3.4 hop fired at its 30-day horizon, not at T: its ETA is not the occurrence.
-            const recurring = payload.schedule as RecurringScheduleDto;
-            return this.scheduleHelper.calculateNextOccurrence(recurring.schedule, now, { timezone: recurring.timezone });
-        }
-        if (delivery.etaSeconds !== undefined && Number.isFinite(delivery.etaSeconds)) {
-            return new Date(delivery.etaSeconds * 1000);
-        }
-        this.logger.warn({ deliveringTask: delivery.taskName }, 'meta-occurrence-unknown: using now');
-        return now;
+        const t = new Date(payload.occurrence);
+        return Number.isNaN(t.getTime()) ? null : t;
     }
 
     /**
